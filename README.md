@@ -5,13 +5,10 @@ Local HTTP bridge that exposes RimWorld's engine, map and player controls to an 
 RimWorld), but usable standalone by anything that wants programmatic control of a running game.
 
 `POST /rpc {"method": "state.summary", "params": {}}`, plus `GET /health /methods /events?since= /screenshot?x=&z=&w=`.
-Method groups: `game.* state.* map.* ui.* engine.* defs.* dev.* steward.*` — see the `[Rpc(name, doc)]` attributes
-under `Source/`.
-
-Includes an optional **Steward** layer (`Source/Steward/`): a work-priority scorer and synchronous stock-job
-manager that run every tick without an LLM in the loop, so a director (human or agent) can set posture/targets
-instead of micromanaging. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the vendored projects it's
-built from.
+Method groups: `game.* state.* map.* ui.* engine.* defs.* dev.* anchor.*` — see the `[Rpc(name, doc)]` attributes
+under `Source/`. This repo is the bridge only — no autonomy layer, no scoring, no automation. `Rpc.RegisterAssembly`
+lets another mod that loads after RimBridge (referencing `RimBridge.dll`) register its own RPC methods onto the
+same dispatcher/HTTP server, for exactly that kind of add-on.
 
 ## Build
 
@@ -27,5 +24,4 @@ dependency) in the mod list, and restart the game (managed DLLs only load at sta
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Portions vendored from other MIT-licensed projects; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT — see [LICENSE](LICENSE).
