@@ -170,13 +170,9 @@ namespace RimBridge.State
                     // the race is decided on the not-immune rate, so that is the one reported.
                     double sevPerDay = props.severityPerDayNotImmune;
                     double immPerDay = props.immunityPerDaySick;
-                    var race = HealthRules.Race(h.Severity, immunity, sevPerDay, immPerDay);
                     lines.Add(HealthRules.Summary(
                         h.LabelCap.ToString() + (h.Part != null ? " (" + h.Part.Label + ")" : ""),
-                        h.Severity, immunity, race,
-                        HealthRules.DaysToFull(h.Severity, sevPerDay),
-                        HealthRules.DaysToFull(immunity, immPerDay),
-                        h.IsTended()));
+                        h.Severity, immunity, sevPerDay, immPerDay, h.IsTended()));
                 }
             }
             catch { }
@@ -212,10 +208,37 @@ namespace RimBridge.State
             {
                 if (p.Dead) return "dead";
                 if (p.Downed) return "downed";
-                if (p.jobs?.curDriver != null) return p.jobs.curDriver.GetReport().StripTags();
-                return p.CurJob?.def?.defName ?? "idle";
+                var report = p.jobs?.curDriver != null ? p.jobs.curDriver.GetReport().StripTags() : (p.CurJob?.def?.defName ?? "idle");
+                return JobRules.Describe(report, CarryText(p), DestinationText(p));
             }
             catch { return p.CurJob?.def?.defName ?? "?"; }
+        }
+
+        /// <summary>What the pawn has in their hands, if anything.</summary>
+        public static string CarryText(Pawn p)
+        {
+            try
+            {
+                var t = p.carryTracker?.CarriedThing;
+                if (t == null) return null;
+                return t.stackCount > 1 ? t.def.defName + " x" + t.stackCount : t.def.defName;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Where the pawn is walking, if they are walking. This is the half of finding 16 that does the work.</summary>
+        public static string DestinationText(Pawn p)
+        {
+            try
+            {
+                var path = p.pather;
+                if (path == null || !path.Moving) return null;
+                var dest = path.Destination;
+                var label = dest.HasThing && dest.Thing != null ? dest.Thing.def.defName : null;
+                var cell = dest.Cell;
+                return JobRules.Place(label, cell.x, cell.z);
+            }
+            catch { return null; }
         }
 
         /// <summary>

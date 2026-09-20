@@ -13,8 +13,14 @@ namespace RimBridge.State
     /// amputation cured him. It moves the wrong way for exactly the case that kills people.
     ///
     /// An immunizable infection is a race: RimWorld kills when severity reaches 1.0 and cures when immunity does.
-    /// So neither number decides anything on its own -- a severity of 0.02 that is losing is worse than a 0.4 that
-    /// is winning -- and the decision is which one arrives first. That is what these rules compute.
+    /// So neither number decides anything on its own -- a severity of 0.02 that is losing the race is worse than a
+    /// 0.4 that is winning it -- and the levels alone cannot tell them apart, because immunity starts at zero and
+    /// is behind at the start of every infection a colonist will shrug off.
+    ///
+    /// <b>These rules report both levels, both rates, and how long each has to run. They do not judge the race.</b>
+    /// An earlier version of this file returned "winning"/"losing" and shouted "UNTENDED". That is us playing the
+    /// colony. The episode 3 reflection derived the decision rule unaided once it had numbers -- severity
+    /// +0.84/day against immunity +0.644/day -- so numbers are what it needs, and the verdict is its own to form.
     /// </summary>
     public static class HealthRules
     {
@@ -23,39 +29,29 @@ namespace RimBridge.State
             => perDay <= 0 ? -1 : (1.0 - current) / perDay;
 
         /// <summary>
-        /// Who wins the race: "winning", "losing", or "stable" when neither side is moving.
+        /// One condition, as levels and rates.
         ///
-        /// Levels alone cannot answer this. A fresh infection is always ahead of an immunity that starts at zero,
-        /// so comparing the two numbers would report "losing" for every infection a colonist is about to shrug off.
-        /// The rates are what the reflection in episode 3 derived by hand, at the cost of nearly losing a colonist.
+        /// Reported every step on purpose. The pair already existed in <c>state.pawn</c>, and finding 12 is that a
+        /// field in an on-demand call is not the same as seeing it: the model made 28 <c>state.pawn</c> calls in
+        /// one episode and still did not notice the infection until it was nearly fatal.
         /// </summary>
-        public static string Race(double severity, double immunity, double severityPerDay, double immunityPerDay)
-        {
-            var toDeath = DaysToFull(severity, severityPerDay);
-            var toImmune = DaysToFull(immunity, immunityPerDay);
-            if (toDeath < 0) return toImmune < 0 ? "stable" : "winning";
-            if (toImmune < 0) return "losing";
-            return toImmune < toDeath ? "winning" : "losing";
-        }
-
-        /// <summary>
-        /// The one-line condition summary for the per-step brief.
-        ///
-        /// Phrased as a sentence rather than as more fields because the brief is read every step and the point of
-        /// the finding is that a number in an on-demand call is not the same as seeing it.
-        /// </summary>
-        public static string Summary(string label, double severity, double immunity, string race, double daysToDeath, double daysToImmune, bool tended)
+        public static string Summary(string label, double severity, double immunity, double severityPerDay, double immunityPerDay, bool tended)
         {
             var parts = new List<string>
             {
-                label + " severity " + Round2(severity),
-                "immunity " + Round2(immunity),
-                race
+                label + ": severity " + Track(severity, severityPerDay),
+                "immunity " + Track(immunity, immunityPerDay),
+                "tended: " + (tended ? "yes" : "no")
             };
-            if (race == "losing" && daysToDeath >= 0) parts.Add("~" + Round1(daysToDeath) + "d to fatal");
-            if (race == "winning" && daysToImmune >= 0) parts.Add("~" + Round1(daysToImmune) + "d to immune");
-            parts.Add(tended ? "tended" : "UNTENDED");
             return string.Join(", ", parts.ToArray());
+        }
+
+        /// <summary>A level, its rate, and when it reaches 1.0 at that rate. "0.02 +0.84/day (1.2d to 1.0)".</summary>
+        static string Track(double level, double perDay)
+        {
+            var s = Round2(level);
+            if (perDay <= 0) return s + " (not rising)";
+            return s + " +" + Round2(perDay) + "/day (" + Round1(DaysToFull(level, perDay)) + "d to 1.0)";
         }
 
         static string Round2(double v) => System.Math.Round(v, 2).ToString(System.Globalization.CultureInfo.InvariantCulture);

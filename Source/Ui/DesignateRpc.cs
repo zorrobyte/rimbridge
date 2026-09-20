@@ -55,7 +55,7 @@ namespace RimBridge.Ui
                     var t = Lookup.ThingOrNull(id.ToString()) ?? Lookup.PawnOrNull(id.ToString());
                     if (t == null) { failed.Add(new JObject { ["thing"] = id.ToString(), ["reason"] = "not found" }); continue; }
                     var r = d.CanDesignateThing(t);
-                    if (!r.Accepted) { failed.Add(new JObject { ["thing"] = t.ThingID, ["reason"] = r.Reason ?? "not applicable" }); continue; }
+                    if (!r.Accepted) { failed.Add(new JObject { ["thing"] = t.ThingID, ["label"] = t.LabelShortCap.ToString(), ["reason"] = RefusalReason(map, t, r) }); continue; }
                     d.DesignateThing(t); ok++;
                     if (isForbid) Hooks.RaiseManualTouch(t, "ui.designate:" + cls);
                 }
@@ -67,7 +67,7 @@ namespace RimBridge.Ui
                 {
                     if (!c.InBounds(map)) { failed.Add(new JObject { ["cell"] = State.Snapshot.Cell(c), ["reason"] = "out of bounds" }); continue; }
                     var r = d.CanDesignateCell(c);
-                    if (!r.Accepted) { if (failed.Count < 20) failed.Add(new JObject { ["cell"] = State.Snapshot.Cell(c), ["reason"] = r.Reason ?? "not applicable" }); continue; }
+                    if (!r.Accepted) { if (failed.Count < 20) failed.Add(new JObject { ["cell"] = State.Snapshot.Cell(c), ["reason"] = string.IsNullOrWhiteSpace(r.Reason) ? "no designation needed here (the game gave no reason)" : r.Reason.StripTags() }); continue; }
                     good.Add(c);
                 }
                 if (good.Count > 0)
@@ -82,6 +82,23 @@ namespace RimBridge.Ui
             }
             if (ok == 0 && things == null && cells.Count == 0) throw new RpcError("give cells, rect or things");
             return new JObject { ["designator"] = cls, ["applied"] = ok, ["failed"] = failed };
+        }
+
+        /// <summary>
+        /// The refusal text for one thing. An AcceptanceReport made from a bool carries an empty Reason, so the
+        /// old `?? "not applicable"` could never fire and the model received `"reason": ""` for every item.
+        /// </summary>
+        static string RefusalReason(Map map, Thing t, AcceptanceReport r)
+        {
+            if (!string.IsNullOrWhiteSpace(r.Reason)) return r.Reason.StripTags();
+            try
+            {
+                var existing = map.designationManager.DesignationOn(t)?.def?.defName;
+                bool inStore = false;
+                try { inStore = StoreUtility.IsInValidBestStorage(t); } catch { }
+                return State.DesignationRules.Explain(existing, t.IsForbidden(Faction.OfPlayer), t.def.EverHaulable, inStore);
+            }
+            catch { return "no designation needed (the game gave no reason)"; }
         }
 
         [Rpc("ui.build_many", "{ops: [ {same params as ui.build}, ... ], stop_on_error?: false} place a whole layout in one call (walls as rect outlines, floors as filled rects, doors/furniture as single cells). Returns one result per op. Use map.detail before and after.")]
@@ -139,14 +156,25 @@ namespace RimBridge.Ui
             }
             else cells.Add(Lookup.Cell(p["at"], "at"));
 
-            var placed = new JArray(); var failed = new JArray();
+            var placed = new JArray(); var failed = new JArray(); var skipped = new JArray();
+            // failed is capped at 25 entries; the counts are not, so a batch can never again report fewer
+            // outcomes than it had cells without saying so.
+            int failedTotal = 0;
             foreach (var c in cells)
             {
-                if (!c.InBounds(map)) { failed.Add(new JObject { ["cell"] = State.Snapshot.Cell(c), ["reason"] = "out of bounds" }); continue; }
-                // skip cells that already have this blueprint/frame/building
-                if (c.GetThingList(map).Any(t => (t is Blueprint_Build bb && bb.def.entityDefToBuild == def) || (t is Frame f && f.def.entityDefToBuild == def) || (def is ThingDef tdd && t.def == tdd))) { continue; }
+                if (!c.InBounds(map)) { failedTotal++; if (failed.Count < 25) failed.Add(new JObject { ["cell"] = State.Snapshot.Cell(c), ["reason"] = "out of bounds" }); continue; }
+                // A cell that already holds this blueprint, frame or building used to land in neither list, so a
+                // batch that skipped every cell returned placed: [], failed: [] and ok: true. Six operations in one
+                // wall batch did exactly that, and nothing in the response said the wall already existed.
+                var existing = c.GetThingList(map).FirstOrDefault(t => (t is Blueprint_Build bb && bb.def.entityDefToBuild == def) || (t is Frame f && f.def.entityDefToBuild == def) || (def is ThingDef tdd && t.def == tdd));
+                if (existing != null)
+                {
+                    var what = existing is Blueprint_Build ? "blueprint already here" : existing is Frame ? "under construction here" : "already built here";
+                    if (skipped.Count < 25) skipped.Add(new JObject { ["cell"] = State.Snapshot.Cell(c), ["reason"] = what, ["thing"] = existing.ThingID });
+                    continue;
+                }
                 var rep = GenConstruct.CanPlaceBlueprintAt(def, c, rot, map, false, null, null, stuff);
-                if (!rep.Accepted) { if (failed.Count < 25) failed.Add(new JObject { ["cell"] = State.Snapshot.Cell(c), ["reason"] = rep.Reason?.StripTags() ?? "blocked" }); continue; }
+                if (!rep.Accepted) { failedTotal++; if (failed.Count < 25) failed.Add(new JObject { ["cell"] = State.Snapshot.Cell(c), ["reason"] = rep.Reason?.StripTags() ?? "blocked" }); continue; }
                 if (dry) { placed.Add(State.Snapshot.Cell(c)); continue; }
                 // Same as Designator_Build: zero-work things (crafting/butcher/sleeping spots, plan markers) and god mode spawn instantly.
                 if (DebugSettings.godMode || def.GetStatValueAbstract(StatDefOf.WorkToBuild, stuff) == 0f)
@@ -183,7 +211,8 @@ namespace RimBridge.Ui
             }
             return new JObject
             {
-                ["def"] = def.defName, ["stuff"] = stuff?.defName, ["placed"] = placed, ["failed"] = failed, ["dry_run"] = dry, ["camera"] = camera,
+                ["def"] = def.defName, ["stuff"] = stuff?.defName, ["placed"] = placed, ["failed"] = failed, ["skipped"] = skipped, ["dry_run"] = dry, ["camera"] = camera,
+                ["cells_considered"] = cells.Count, ["placed_count"] = placed.Count, ["failed_count"] = failedTotal, ["skipped_count"] = skipped.Count,
                 ["cost_each"] = new JObject(cost.Select(c => new JProperty(c.thingDef.defName, c.count))),
                 ["work"] = Math.Round(def.GetStatValueAbstract(StatDefOf.WorkToBuild, stuff)),
             };

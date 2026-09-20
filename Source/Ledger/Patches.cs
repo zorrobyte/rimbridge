@@ -501,11 +501,81 @@ namespace RimBridge.Ledger
     {
         private int _lastDay = -1;
         private StoryDanger _lastDanger = StoryDanger.None;
+        // Who is being carried off, and which infections we have already announced. Both are "has this started?"
+        // questions, and neither had an event: the model's whole trigger history for the raid that cost it a
+        // colonist was four wakes, none of which was the chase, the kidnap or the interception.
+        private readonly HashSet<int> _carried = new HashSet<int>();
+        private readonly HashSet<string> _infections = new HashSet<string>();
         public LedgerComponent(Game game) { }
 
         public override void FinalizeInit()
         {
             EventLedger.Add("game", "game loaded/started", new JObject { ["day"] = GenDate.DaysPassed });
+        }
+
+        /// <summary>
+        /// A colonist being carried away, and how close the carrier is to leaving with them.
+        ///
+        /// There was no pawn_kidnapped kind, no "hostile carrying a colonist" and no "hostile near the map edge".
+        /// The only related kind was hostile_group_gone, which fires once the raider has left -- the one moment
+        /// the information is worth nothing. The model slept three in-game hours through a kidnapping because
+        /// nothing in its wake_on list could fire for one.
+        /// </summary>
+        void WatchCarried(Map m)
+        {
+            if (m == null) return;
+            var seen = new HashSet<int>();
+            foreach (var p in m.mapPawns.AllPawnsSpawned)
+            {
+                if (p.Faction == null || !p.HostileTo(Faction.OfPlayer)) continue;
+                if (!(p.carryTracker?.CarriedThing is Pawn victim)) continue;
+                if (victim.Faction != Faction.OfPlayer) continue;
+                seen.Add(victim.thingIDNumber);
+                int edge = EdgeDistance(m, p.Position);
+                if (_carried.Add(victim.thingIDNumber))
+                    EventLedger.Add("colonist_carried", $"{p.LabelShortCap} is carrying {victim.LabelShortCap} at {State.Snapshot.Cell(p.Position)}, {edge} cells from the map edge",
+                        new JObject { ["colonist"] = victim.LabelShort, ["carrier"] = p.LabelShort, ["pos"] = State.Snapshot.Cell(p.Position), ["edge_distance"] = edge });
+            }
+            foreach (var id in _carried.Where(i => !seen.Contains(i)).ToList())
+            {
+                _carried.Remove(id);
+                var who = m.mapPawns.AllPawnsSpawned.FirstOrDefault(x => x.thingIDNumber == id);
+                EventLedger.Add("colonist_carried_gone", (who != null ? who.LabelShortCap.ToString() : "a colonist") + " is no longer being carried",
+                    new JObject { ["colonist"] = who?.LabelShort });
+            }
+        }
+
+        static int EdgeDistance(Map m, IntVec3 c)
+            => Math.Max(0, Math.Min(Math.Min(c.x, c.z), Math.Min(m.Size.x - 1 - c.x, m.Size.z - 1 - c.z)));
+
+        /// <summary>
+        /// A new immunizable condition on a colonist, announced when it starts.
+        ///
+        /// The per-step brief now carries severity, immunity and both rates, but a step the model is asleep
+        /// through carries nothing. An infection at severity 0.02 is cheap to treat and invisible; the game's own
+        /// Alert_LifeThreateningHediff fires only after the cheap-intervention window has closed.
+        ///
+        /// The event states that it started and where. What it means is the reader's to decide.
+        /// </summary>
+        void WatchInfections(Map m)
+        {
+            if (m == null) return;
+            var live = new HashSet<string>();
+            foreach (var p in m.mapPawns.FreeColonists)
+            {
+                foreach (var h in p.health.hediffSet.hediffs)
+                {
+                    if (!h.Visible || h.TryGetComp<HediffComp_Immunizable>() == null) continue;
+                    var key = p.thingIDNumber + ":" + h.def.defName + ":" + (h.Part?.Label ?? "whole");
+                    live.Add(key);
+                    if (!_infections.Add(key)) continue;
+                    double imm = 0;
+                    try { imm = p.health.immunity.GetImmunity(h.def); } catch { }
+                    EventLedger.Add("infection", $"{p.LabelShortCap}: {h.LabelCap}{(h.Part != null ? " (" + h.Part.Label + ")" : "")} severity {Math.Round(h.Severity, 2)}, immunity {Math.Round(imm, 2)}",
+                        new JObject { ["colonist"] = p.LabelShort, ["hediff"] = h.def.defName, ["part"] = h.Part?.Label, ["severity"] = Math.Round(h.Severity, 2), ["immunity"] = Math.Round(imm, 2) });
+                }
+            }
+            _infections.RemoveWhere(k => !live.Contains(k));
         }
 
         public override void GameComponentTick()
@@ -515,6 +585,10 @@ namespace RimBridge.Ledger
             catch (Exception ex) { BridgeLog.Warning("lord flush: " + ex.Message); }
             if (Find.TickManager.TicksGame % 60 == 0)
             {
+                try { WatchCarried(Find.CurrentMap); }
+                catch (Exception ex) { BridgeLog.Warning("carried watch: " + ex.Message); }
+                try { WatchInfections(Find.CurrentMap); }
+                catch (Exception ex) { BridgeLog.Warning("infection watch: " + ex.Message); }
                 try
                 {
                     var m = Find.CurrentMap;

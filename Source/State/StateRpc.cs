@@ -73,6 +73,10 @@ namespace RimBridge.State
             o["pain"] = Math.Round(pawn.health.hediffSet.PainTotal * 100);
             o["bleeding"] = Math.Round(pawn.health.hediffSet.BleedRateTotal, 2);
             o["needs_tending"] = pawn.health.HasHediffsNeedingTend();
+            // Finding 14: state.pawn did not report pending surgery at all, so a queued amputation was invisible
+            // in the one call that is meant to answer "what is going on with this colonist?".
+            var surgery = pawn.BillStack?.Bills?.Select(b => new JObject { ["id"] = b.GetUniqueLoadID(), ["recipe"] = b.recipe?.defName, ["label"] = b.LabelCap.ToString(), ["part"] = (b as Bill_Medical)?.Part?.Label, ["suspended"] = b.suspended }).ToList();
+            if (surgery != null && surgery.Count > 0) o["surgery_bills"] = new JArray(surgery.Select(x => (JToken)x));
             o["in_bed"] = pawn.InBed();
             o["medical_care"] = pawn.playerSettings?.medCare.ToString();
             o["hostility_response"] = pawn.playerSettings?.hostilityResponse.ToString();
@@ -219,7 +223,8 @@ namespace RimBridge.State
             return arr;
         }
 
-        [Rpc("state.bills", "{thing: id} bills on a work table")]
+        /// <summary>Bills on a work table -- or the surgeries queued on a pawn, which is the same call.</summary>
+        [Rpc("state.bills", "{thing: id} bills on a work table, or the surgery bills queued on a pawn (pass the pawn id)")]
         public static JToken Bills(JObject p)
         {
             var t = Lookup.Thing(P.Str(p, "thing"));
@@ -229,6 +234,7 @@ namespace RimBridge.State
                 ["id"] = b.GetUniqueLoadID(), ["recipe"] = b.recipe.defName, ["label"] = b.LabelCap, ["suspended"] = b.suspended,
                 ["mode"] = (b as Bill_Production)?.repeatMode?.defName, ["target"] = (b as Bill_Production)?.targetCount, ["repeat"] = (b as Bill_Production)?.repeatCount,
                 ["ingredient_radius"] = b.ingredientSearchRadius, ["paused"] = (b as Bill_Production)?.paused,
+                ["part"] = (b as Bill_Medical)?.Part?.Label,
             }));
         }
 
