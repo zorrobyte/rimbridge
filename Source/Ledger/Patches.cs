@@ -121,8 +121,10 @@ namespace RimBridge.Ledger
         {
             try
             {
-                if (___pawn == null || !___pawn.IsColonist) return;
-                EventLedger.Add("colonist_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName }, ___pawn.PositionHeld, ___pawn.ThingID);
+                if (___pawn == null || (!___pawn.IsColonist && !___pawn.IsPrisonerOfColony)) return;
+                EventLedger.Add("pawn_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName, ["colonist"] = ___pawn.IsColonist }, ___pawn.PositionHeld, ___pawn.ThingID);
+                if (___pawn.IsColonist)
+                    EventLedger.Add("colonist_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName }, ___pawn.PositionHeld, ___pawn.ThingID);
             }
             catch (Exception ex) { BridgeLog.Warning("ledger downed: " + ex.Message); }
         }

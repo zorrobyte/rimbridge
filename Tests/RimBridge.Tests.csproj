@@ -20,6 +20,15 @@
   <!-- Verse-free source files only -->
   <ItemGroup>
     <Compile Include="../Source/Engine/PathParser.cs" />
+    <Compile Include="../Source/Decision/DecisionLogic.cs" />
+    <Compile Include="../Source/World/WorldLogic.cs" />
+    <Compile Include="../Source/World/DiplomacyLogic.cs" />
+    <Compile Include="../Source/Decision/MedicalLogic.cs" />
+    <Compile Include="../Source/World/IdeoLogic.cs" />
+    <Compile Include="../Source/World/CaravanLogic.cs" />
+    <Compile Include="../Source/World/LifeLogic.cs" />
+    <Compile Include="../Source/World/PodsLogic.cs" />
+    <Compile Include="../Source/State/AlertLogic.cs" />
   </ItemGroup>
 
 </Project>

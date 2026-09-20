@@ -5,7 +5,7 @@ Local HTTP bridge that exposes RimWorld's engine, map and player controls to an 
 RimWorld), but usable standalone by anything that wants programmatic control of a running game.
 
 `POST /rpc {"method": "state.summary", "params": {}}`, plus `GET /health /methods /events?since= /screenshot?x=&z=&w=`.
-Method groups: `game.* state.* map.* ui.* engine.* defs.* dev.* anchor.*` — see the `[Rpc(name, doc)]` attributes
+Method groups: `game.* state.* map.* ui.* engine.* defs.* dev.* anchor.* decision.* action.* world.* settlement.* caravan.* pods.* quest.* diplomacy.* medical.* ideo.* life.* alerts.*` — see the `[Rpc(name, doc)]` attributes
 under `Source/`. This repo is the bridge only — no autonomy layer, no scoring, no automation. `Rpc.RegisterAssembly`
 lets another mod that loads after RimBridge (referencing `RimBridge.dll`) register its own RPC methods onto the
 same dispatcher/HTTP server, for exactly that kind of add-on.
