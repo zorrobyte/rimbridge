@@ -219,18 +219,56 @@ namespace RimBridge.Ledger
         }
     }
 
+    /// <summary>
+    /// The raid alarm.
+    ///
+    /// This used to emit in the AddLord postfix, and a Lord is created BEFORE its pawns are attached and before its
+    /// LordJob is set. Both were empty every time, so every raid the model was ever woken for announced itself as
+    /// "hostile group: Toxin Outfit x0 ()" -- zero raiders, unknown mission. state.threats was correct all along;
+    /// only the alarm, which is the part that wakes the model mid-step, was wrong.
+    ///
+    /// So the lord is queued here and read a tick later, once the game has populated it.
+    /// </summary>
     [HarmonyPatch(typeof(LordManager), nameof(LordManager.AddLord))]
     static class Patch_LordAdd
     {
+        internal static readonly List<(Lord lord, int queuedTick)> Pending = new List<(Lord, int)>();
+
+        /// <summary>Give up waiting after a second and report what we have, so an alarm is never silently dropped.</summary>
+        internal const int DeadlineTicks = 60;
+
         static void Postfix(Lord newLord)
         {
             try
             {
                 if (newLord.faction == null || !newLord.faction.HostileTo(Faction.OfPlayer)) return;
-                EventLedger.Add("hostile_group", $"hostile group: {newLord.faction.Name} x{newLord.ownedPawns.Count} ({newLord.LordJob?.GetType().Name})",
-                    new JObject { ["faction"] = newLord.faction.Name, ["count"] = newLord.ownedPawns.Count, ["job"] = newLord.LordJob?.GetType().Name, ["lord"] = newLord.loadID });
+                Pending.Add((newLord, Find.TickManager.TicksGame));
             }
             catch (Exception ex) { BridgeLog.Warning("ledger lord: " + ex.Message); }
+        }
+
+        /// <summary>Emit every queued lord that is ready, or that has waited long enough. Called once per tick.</summary>
+        internal static void Flush()
+        {
+            if (Pending.Count == 0) return;
+            var now = Find.TickManager.TicksGame;
+            for (int i = Pending.Count - 1; i >= 0; i--)
+            {
+                var (lord, queued) = Pending[i];
+                var ready = lord.ownedPawns != null && lord.ownedPawns.Count > 0 && lord.LordJob != null;
+                // now < queued means the clock moved backwards (a save was loaded); flush rather than wait forever.
+                if (!ready && now >= queued && now - queued < DeadlineTicks) continue;
+                Pending.RemoveAt(i);
+                try
+                {
+                    if (lord.faction == null) continue;
+                    var count = lord.ownedPawns?.Count ?? 0;
+                    var job = lord.LordJob?.GetType().Name;
+                    EventLedger.Add("hostile_group", $"hostile group: {lord.faction.Name} x{count} ({job})",
+                        new JObject { ["faction"] = lord.faction.Name, ["count"] = count, ["job"] = job, ["lord"] = lord.loadID });
+                }
+                catch (Exception ex) { BridgeLog.Warning("ledger lord flush: " + ex.Message); }
+            }
         }
     }
 
@@ -472,6 +510,9 @@ namespace RimBridge.Ledger
 
         public override void GameComponentTick()
         {
+            // Not rate-limited: a raid alarm one tick late is the point, a raid alarm a second late is not.
+            try { Patch_LordAdd.Flush(); }
+            catch (Exception ex) { BridgeLog.Warning("lord flush: " + ex.Message); }
             if (Find.TickManager.TicksGame % 60 == 0)
             {
                 try

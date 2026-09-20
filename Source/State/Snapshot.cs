@@ -146,12 +146,56 @@ namespace RimBridge.State
             return tally;
         }
 
+        /// <summary>
+        /// The immunizable conditions a colonist is fighting, one sentence each.
+        ///
+        /// Read every step, on purpose. The severity/immunity pair lives in state.pawn today, and finding 12 is that
+        /// having a field in an on-demand call is not the same as seeing it: the model made 28 state.pawn calls in
+        /// one episode and still missed an infection until it was nearly fatal.
+        /// </summary>
+        public static List<string> Conditions(Pawn p)
+        {
+            var lines = new List<string>();
+            try
+            {
+                foreach (var h in p.health.hediffSet.hediffs)
+                {
+                    if (!h.Visible) continue;
+                    var imm = h.TryGetComp<HediffComp_Immunizable>();
+                    if (imm == null) continue;
+                    var props = imm.props as HediffCompProperties_Immunizable;
+                    if (props == null) continue;
+                    double immunity = p.health.immunity.GetImmunity(h.def);
+                    // severityPerDayImmune is the rate once immunity has topped out, which is the recovery leg;
+                    // the race is decided on the not-immune rate, so that is the one reported.
+                    double sevPerDay = props.severityPerDayNotImmune;
+                    double immPerDay = props.immunityPerDaySick;
+                    var race = HealthRules.Race(h.Severity, immunity, sevPerDay, immPerDay);
+                    lines.Add(HealthRules.Summary(
+                        h.LabelCap.ToString() + (h.Part != null ? " (" + h.Part.Label + ")" : ""),
+                        h.Severity, immunity, race,
+                        HealthRules.DaysToFull(h.Severity, sevPerDay),
+                        HealthRules.DaysToFull(immunity, immPerDay),
+                        h.IsTended()));
+                }
+            }
+            catch { }
+            return lines;
+        }
+
         public static JObject PawnBrief(Pawn p)
         {
             var o = Engine.Render.PawnHandle(p);
+            // Finding 11: without this the model called a bearded man "she" for a whole episode, and 28 state.pawn
+            // calls that each returned gender did not correct it.
+            o["gender"] = p.gender.ToString();
             o["mood"] = p.needs?.mood != null ? Math.Round(p.needs.mood.CurLevelPercentage * 100) : (double?)null;
+            // Kept, but no longer the only answer to "how is this colonist doing": it scores intact body parts and
+            // for an amputation-cured infection it moves the wrong way. See HealthRules.
             o["health"] = Math.Round(p.health.summaryHealth.SummaryHealthPercent * 100);
             o["job"] = JobText(p);
+            var conditions = Conditions(p);
+            if (conditions.Count > 0) o["conditions"] = new JArray(conditions.Cast<object>().ToArray());
             if (p.InMentalState) o["mental_state"] = p.MentalStateDef?.defName;
             if (p.health.hediffSet.BleedRateTotal > 0.01f) o["bleeding"] = Math.Round(p.health.hediffSet.BleedRateTotal, 2);
             if (p.health.HasHediffsNeedingTend()) o["needs_tending"] = true;
