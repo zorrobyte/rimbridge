@@ -181,21 +181,27 @@ namespace RimBridge.World
             var arr = new JArray();
             foreach (var s in q.Take(200))
             {
-                bool canTrade = false;
-                try { canTrade = s.CanTradeNow; } catch { }
-                if (tradableOnly && !canTrade) continue;
-                int tile = -1;
-                try { tile = s.Tile; } catch { }
-                string name = tile.ToString();
-                try { name = s.Name; } catch { try { name = s.Label; } catch { } }
-                var o = new JObject
+                // World objects can be mid-despawn or factionless ruins; one bad entry
+                // must not fail the whole list.
+                try
                 {
-                    ["id"] = s.ID, ["tile"] = tile, ["name"] = name,
-                    ["faction"] = s.Faction?.Name, ["goodwill"] = s.Faction?.PlayerGoodwill,
-                    ["hostile"] = s.Faction != null && s.Faction.HostileTo(Faction.OfPlayer),
-                    ["has_map"] = s.HasMap, ["trader"] = s.TraderKind?.defName, ["can_trade"] = canTrade,
-                };
-                arr.Add(o);
+                    bool canTrade = false;
+                    try { canTrade = s.CanTradeNow; } catch { }
+                    if (tradableOnly && !canTrade) continue;
+                    int tile = -1;
+                    try { tile = s.Tile; } catch { }
+                    string name = tile.ToString();
+                    try { name = s.Name; } catch { try { name = s.Label; } catch { } }
+                    var o = new JObject
+                    {
+                        ["id"] = s.ID, ["tile"] = tile, ["name"] = name,
+                        ["faction"] = s.Faction?.Name, ["goodwill"] = s.Faction?.PlayerGoodwill,
+                        ["hostile"] = s.Faction != null && s.Faction.HostileTo(Faction.OfPlayer),
+                        ["has_map"] = s.HasMap, ["trader"] = s.TraderKind?.defName, ["can_trade"] = canTrade,
+                    };
+                    arr.Add(o);
+                }
+                catch { }
             }
             return arr;
         }

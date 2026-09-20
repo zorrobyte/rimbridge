@@ -28,6 +28,9 @@
     <Compile Include="../Source/World/CaravanLogic.cs" />
     <Compile Include="../Source/World/LifeLogic.cs" />
     <Compile Include="../Source/World/PodsLogic.cs" />
+    <Compile Include="../Source/World/RitualLogic.cs" />
+    <Compile Include="../Source/World/TradeLogic.cs" />
+    <Compile Include="../Source/World/MechShuttleGeneLogic.cs" />
     <Compile Include="../Source/State/AlertLogic.cs" />
   </ItemGroup>
 

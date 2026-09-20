@@ -125,17 +125,13 @@ namespace RimBridge.World
             var tr = pod.TryGetComp<CompTransporter>() ?? throw new RpcError("not a transport pod");
             if (!pod.Spawned || pod.Map != map) throw new RpcError("pod is not on the current map");
             var launchable = pod.TryGetComp<CompLaunchable>() ?? throw new RpcError("pod has no launcher");
-            int dest = P.Int(p, "tile");
-            if (dest < 0 || dest >= Find.WorldGrid.TilesCount) throw new RpcError($"tile {dest} out of range");
             string action = P.Str(p, "action").ToLowerInvariant();
 
-            Settlement? settlement = null;
-            if (action == "gift" || action == "trade" || action == "visit" || action == "attack")
-            {
-                var so = Find.WorldObjects.AllWorldObjects.OfType<Settlement>()
-                    .FirstOrDefault(s => s.ID == P.Int(p, "settlement", -1)) ?? throw new RpcError("action needs settlement=<world id>");
-                settlement = so;
-            }
+            var so = Find.WorldObjects.AllWorldObjects.OfType<Settlement>()
+                .FirstOrDefault(s => s.ID == P.Int(p, "settlement", -1)) ?? throw new RpcError("action needs settlement=<world id>");
+            Settlement settlement = so;
+            int dest = p["tile"] != null ? P.Int(p, "tile") : settlement.Tile;
+            if (dest < 0 || dest >= Find.WorldGrid.TilesCount) throw new RpcError($"tile {dest} out of range");
             TransportersArrivalAction arrival = action switch
             {
                 "gift" => new TransportersArrivalAction_GiveGift(settlement!),
