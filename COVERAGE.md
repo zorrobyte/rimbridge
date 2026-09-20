@@ -49,14 +49,18 @@ Generated 2026-09-20 from `bridge.methods` (87 methods) plus a live playtest.
    missing roles/behavior. Open: animal-sacrifice positive path (needs slaughter-festival ideo),
    role-less gatherings (vanilla lord job refuses them; direct-execute path unknown).
 6. **Mechs/genes/children/anomaly** — DONE state + `mech.list/setmode` (live-verified: Lifter→Escort),
-   `gene.status/extract/cancel`. Gene success path open: needs a gene-bearing prisoner/colonist
-   (spawned pawns generate baseliner; hostile downed refused by vanilla `CanAcceptPawn`).
+   `gene.status/extract/cancel`. Live-verified 2026-09-20: Greaser-Xenohuman prisoner Gretty
+   captured, contained via `gene.extract` (powered extractor + vanometric cell). Note: spawned
+   pawns generate baseliner; hostile downed refused by vanilla `CanAcceptPawn`; escort hostile
+   grenadiers with `dev.kill_hostiles` FIRST — they bomb buildings.
 7. **Alert verbs** — DONE (`alerts.detail`: culprits + suggested fix for 60+ alert classes).
 8. **Power control** — assessed: covered via `ui.press` toggles + `ui.designate`/`ui.build`; no dedicated
    verbs needed.
 7. **Alert resolution verbs** — map each active alert to the action that clears it.
 8. **Power control** — switch/battery/fuel management (currently read-only).
-9. **Trade** — DONE via `trade.execute` (live-verified at settlement); `shuttle.list/launch`
+9. **Trade** — DONE via `trade.execute` (live-verified at settlement: sold Traci's knife for
+   silver, `trade.execute` at Hazli; dialog-trade Buy counts delegate to vanilla `AdjustTo` clamp);
+   `shuttle.list/launch`
    (live-verified: passenger-shuttle visit flight). Imperial quest shuttles fly on quest orders
    (no free-flight verb in vanilla; endpoint reports readiness honestly).
 

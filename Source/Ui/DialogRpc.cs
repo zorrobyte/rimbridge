@@ -264,10 +264,11 @@ namespace RimBridge.Ui
                             Tradeable? tr = int.TryParse(kv.Key, out int ti) ? deal.AllTradeables.ElementAtOrDefault(ti) : deal.AllTradeables.FirstOrDefault(x => x.ThingDef?.defName == kv.Key) ?? deal.AllTradeables.FirstOrDefault(x => string.Equals(x.Label, kv.Key, StringComparison.OrdinalIgnoreCase));
                             if (tr == null) { res[kv.Key] = "not found"; continue; }
                             int n = (int)kv.Value!;
+                            // AdjustTo clamps to the legal range itself; pre-clamping zeroes buys.
                             // Our convention: n > 0 = BUY n, n < 0 = SELL n. Engine convention: CountToTransfer > 0 = player sells. So negate.
                             int min = tr.GetMinimumToTransfer(), max = tr.GetMaximumToTransfer();
-                            int want = Math.Max(min, Math.Min(max, -n));
-                            tr.AdjustTo(want);
+                            // (AdjustTo call moved below; vanilla clamps to the legal range itself)
+                            tr.AdjustTo(-n);
                             res[kv.Key] = $"{(tr.CountToTransfer < 0 ? "buy " + (-tr.CountToTransfer) : tr.CountToTransfer > 0 ? "sell " + tr.CountToTransfer : "none")} (engine range {min}..{max})";
                         }
                         if (label == null && idx < 0) return new JObject { ["trade"] = res, ["dialog"] = Describe(dt, Find.WindowStack.Windows.IndexOf(dt)) };
