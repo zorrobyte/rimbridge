@@ -96,7 +96,8 @@ namespace RimBridge.Dev
         {
             Map();
             var pawn = Lookup.Pawn(P.Str(p, "pawn"));
-            var need = pawn.needs.TryGetNeed(Lookup.Def<NeedDef>(P.Str(p, "need"))) ?? throw new RpcError("pawn lacks that need");
+            if (pawn.Dead) throw new RpcError($"{pawn.LabelShortCap} is dead");
+            var need = pawn.needs?.TryGetNeed(Lookup.Def<NeedDef>(P.Str(p, "need"))) ?? throw new RpcError("pawn lacks that need");
             need.CurLevelPercentage = P.Float(p, "level");
             return new JObject { ["need"] = need.def.defName, ["level"] = need.CurLevelPercentage };
         }

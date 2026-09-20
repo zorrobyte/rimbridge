@@ -137,7 +137,7 @@ namespace RimBridge.World
             try
             {
                 foreach (var q in map.mapPawns.AllPawns)
-                    if (q.RaceProps.Humanlike && q.Spawned && !q.Dead) poolPawns.Add(q);
+                    if (q.Spawned && !q.Dead && (q.RaceProps.Humanlike || q.Faction == Faction.OfPlayer)) poolPawns.Add(q);
                 assignments.Setup(poolPawns, new List<Pawn>(), new Dictionary<string, Pawn>(), new List<Pawn>(), organizer);
                 var pool = assignments.AllCandidatePawns;
                 foreach (var q in poolPawns) if (!pool.Contains(q)) pool.Add(q);
@@ -176,7 +176,7 @@ namespace RimBridge.World
                 var direct = new List<string>();
                 foreach (var q in map.mapPawns.AllPawns)
                 {
-                    if (!q.RaceProps.Humanlike || !q.Spawned || q.Dead) continue;
+                    if (!q.Spawned || q.Dead || (!q.RaceProps.Humanlike && q.Faction != Faction.OfPlayer)) continue;
                     if (allowed != null && !allowed.Contains(q.ThingID)) continue;
                     string reason = "";
                     bool applies = false;
