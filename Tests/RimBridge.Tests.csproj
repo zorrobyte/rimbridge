@@ -35,6 +35,7 @@
     <Compile Include="../Source/State/ObservationRules.cs" />
     <Compile Include="../Source/State/FoodRules.cs" />
     <Compile Include="../Source/State/StorageRules.cs" />
+    <Compile Include="../Source/State/HuntingRules.cs" />
   </ItemGroup>
 
 </Project>

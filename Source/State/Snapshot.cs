@@ -63,6 +63,8 @@ namespace RimBridge.State
             o["hostiles"] = new JArray(hostiles.Take(60).Select(t => (JToken)HostileHandle(map, t)));
             if (hostiles.Count > 60) o["hostiles_truncated"] = hostiles.Count;
             o["alerts"] = Alerts();
+            var problems = HuntingProblems(map);
+            if (problems.Count > 0) o["problems"] = new JArray(problems);
             o["research_current"] = Find.ResearchManager.GetProject()?.defName;
             o["research_progress"] = Find.ResearchManager.GetProject() is { } rp ? Math.Round(rp.ProgressPercent * 100) : 0;
             o["pending_letters"] = Find.LetterStack.LettersListForReading.Count;
@@ -170,6 +172,28 @@ namespace RimBridge.State
                 return p.CurJob?.def?.defName ?? "idle";
             }
             catch { return p.CurJob?.def?.defName ?? "?"; }
+        }
+
+        /// <summary>
+        /// Hunt designations that no colonist can action.
+        ///
+        /// Game rule (1.6): <c>WorkGiver_HunterHunt.ShouldSkip</c> blocks a pawn with no ranged hunting weapon and
+        /// a pawn wearing a shield belt with a ranged weapon. It ignores the forced flag. The game says so once,
+        /// as a transient message at designation time, so the condition is invisible afterwards.
+        /// </summary>
+        public static List<string> HuntingProblems(Map map)
+        {
+            int designations = map.designationManager.SpawnedDesignationsOfDef(DesignationDefOf.Hunt).Count();
+            int assigned = 0, armed = 0, shielded = 0;
+            foreach (var p in map.mapPawns.FreeColonistsSpawned)
+            {
+                if (p.Downed || p.workSettings == null || !p.workSettings.WorkIsActive(WorkTypeDefOf.Hunting)) continue;
+                assigned++;
+                if (!WorkGiver_HunterHunt.HasHuntingWeapon(p)) continue;
+                armed++;
+                if (WorkGiver_HunterHunt.HasShieldAndRangedWeapon(p)) shielded++;
+            }
+            return HuntingRules.Problems(designations, assigned, armed, shielded);
         }
 
         public static JArray Alerts()
