@@ -27,7 +27,7 @@ namespace RimBridge.World
                 .Where(i => i != null).Distinct()!;
         }
 
-        static Precept_Ritual FindRitual(Map map, string name, string? ideoName)
+        static Precept_Ritual FindRitual(Map map, string name, string? ideoName, int? obligationId = null)
         {
             var matches = new List<(Ideo, Precept_Ritual)>();
             foreach (var ideo in ColonyIdeos(map))
@@ -38,7 +38,17 @@ namespace RimBridge.World
                         matches.Add((ideo, r));
             if (ideoName != null) matches = matches.Where(m => string.Equals(m.Item1.name, ideoName, StringComparison.OrdinalIgnoreCase)).ToList();
             if (matches.Count == 0) throw new RpcError($"no ritual '{name}' in colony ideologies");
-            if (matches.Count > 1) throw new RpcError($"'{name}' is in multiple ideologies; pass ideo=<name>");
+            if (matches.Count > 1 && obligationId != null)
+            {
+                var holding = matches.Where(m => { try { return m.Item2.activeObligations.Any(o => o.ID == obligationId.Value); } catch { return false; } }).ToList();
+                if (holding.Count == 1) return holding[0].Item2;
+            }
+            if (matches.Count > 1)
+            {
+                var anytime = matches.Where(m => { try { return m.Item2.isAnytime; } catch { return false; } }).ToList();
+                if (anytime.Count == 1) return anytime[0].Item2;
+            }
+            if (matches.Count > 1) throw new RpcError($"'{name}' matches {matches.Count} rituals; pass ideo=<name> (or obligation=<id>): " + string.Join(" | ", matches.Select(m => { try { return m.Item2.LabelCap.ToString().StripTags() + " (" + m.Item1.name + ")"; } catch { return "?"; } })));
             return matches[0].Item2;
         }
 
@@ -92,7 +102,9 @@ namespace RimBridge.World
         {
             RequirePlaying();
             var map = Find.CurrentMap ?? throw new RpcError("no current map");
-            var ritual = FindRitual(map, P.Str(p, "ritual"), p["ideo"] != null ? P.Str(p, "ideo") : null);
+            int? wantOb = null;
+            try { if (p["obligation"] != null) wantOb = P.Int(p, "obligation"); } catch { }
+            var ritual = FindRitual(map, P.Str(p, "ritual"), p["ideo"] != null ? P.Str(p, "ideo") : null, wantOb);
 
             RitualObligation? obligation = null;
             if (p["obligation"] != null)
@@ -154,7 +166,9 @@ namespace RimBridge.World
 
             List<RitualRole>? roles = null;
             try { roles = ritual.behavior?.def?.stages != null ? ritual.behavior.def.roles : null; } catch { }
-            if (roles == null || roles.Count == 0) throw new RpcError("ritual has no behavior roles");
+            if (roles == null) throw new RpcError("ritual has no behavior (cannot start)");
+            // Role-less rituals (sky-lantern parties etc.) run as pure gatherings: no slots,
+            // organizer + spectators become the lord. The game still refuses if it cannot.
 
             var slots = new List<RitualLogic.RoleSlot>();
             var cands = new Dictionary<string, IList<string>>();
@@ -209,6 +223,16 @@ namespace RimBridge.World
             }
 
             var parts = assignments.Participants.ToList();
+            // Role-less gatherings have no assignments: the whole colony attends as the
+            // lord, like the dialog's default spectator selection. The game still refuses
+            // if it cannot run.
+            if (parts.Count == 0 && roles.Count == 0)
+            {
+                foreach (var q in map.mapPawns.FreeColonists)
+                    if (q.Spawned && !q.Dead && !parts.Contains(q)) parts.Add(q);
+                if (!parts.Contains(organizer) && !organizer.Dead && organizer.Spawned && organizer.Map == map)
+                    parts.Add(organizer);
+            }
             if (parts.Count == 0) throw new RpcError("no participants could be assigned");
             LordJob_Ritual lordJob;
             try { lordJob = new LordJob_Ritual(target, ritual, obligation, stages, assignments, organizer, null); }
