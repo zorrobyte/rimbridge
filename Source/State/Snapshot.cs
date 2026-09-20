@@ -16,6 +16,12 @@ namespace RimBridge.State
         public static JObject Daily(Map map)
         {
             var cols = map.mapPawns.FreeColonists;
+            // food_days used to come straight from resourceCounter, which iterates the haul-destination groups --
+            // storage. That answers "what can a bill consume?", and it was being used to answer "will we starve?".
+            // Turn 1 of episode 1 opened with "food_days 0.0 - this is an emergency" beside outside_storage's own
+            // food_stacks: 32, and the model spent the whole step on a famine that was not happening.
+            double stored = map.resourceCounter.TotalHumanEdibleNutrition;
+            var loose = LooseFood(map);
             return new JObject
             {
                 ["colonists"] = cols.Count,
@@ -26,8 +32,11 @@ namespace RimBridge.State
                 ["wealth_items"] = Math.Round(map.wealthWatcher.WealthItems),
                 ["wealth_buildings"] = Math.Round(map.wealthWatcher.WealthBuildings),
                 ["mood_avg"] = cols.Count > 0 ? Math.Round(cols.Where(p => p.needs?.mood != null).Select(p => p.needs.mood.CurLevelPercentage).DefaultIfEmpty(0).Average() * 100) : 0,
-                ["nutrition"] = Math.Round(map.resourceCounter.TotalHumanEdibleNutrition, 1),
-                ["food_days"] = cols.Count > 0 ? Math.Round(map.resourceCounter.TotalHumanEdibleNutrition / (cols.Count * 1.6f), 1) : 0,
+                ["nutrition"] = Math.Round(stored, 1),
+                ["nutrition_loose"] = Math.Round(loose.Nutrition, 1),
+                ["nutrition_forbidden"] = Math.Round(loose.Forbidden, 1),
+                ["food_days"] = FoodRules.FoodDays(stored + loose.Nutrition, cols.Count),
+                ["food_days_stored"] = FoodRules.FoodDays(stored, cols.Count),
                 ["threat_points"] = Math.Round(StorytellerUtility.DefaultThreatPointsNow(map)),
                 ["research_done"] = DefDatabase<ResearchProjectDef>.AllDefs.Count(r => r.IsFinished),
                 ["temp_outdoor"] = Math.Round(map.mapTemperature.OutdoorTemp),
@@ -57,7 +66,7 @@ namespace RimBridge.State
             o["research_current"] = Find.ResearchManager.GetProject()?.defName;
             o["research_progress"] = Find.ResearchManager.GetProject() is { } rp ? Math.Round(rp.ProgressPercent * 100) : 0;
             o["pending_letters"] = Find.LetterStack.LettersListForReading.Count;
-            o["zones"] = new JArray(map.zoneManager.AllZones.Select(z => new JObject { ["label"] = z.label, ["type"] = z is Zone_Growing zg ? "growing:" + zg.GetPlantDefToGrow()?.defName : (z is Zone_Stockpile ? "stockpile" : z.GetType().Name), ["cells"] = z.Cells.Count, ["at"] = Cell(z.Cells.Count > 0 ? z.Cells[0] : IntVec3.Invalid) }));
+            o["zones"] = new JArray(map.zoneManager.AllZones.Select(z => ZoneBrief(z, map)));
             o["blueprints"] = map.listerThings.ThingsInGroup(ThingRequestGroup.Blueprint).Count(b => b.Faction == Faction.OfPlayer);
             o["frames"] = map.listerThings.ThingsInGroup(ThingRequestGroup.BuildingFrame).Count(b => b.Faction == Faction.OfPlayer);
             o["designations"] = map.designationManager.AllDesignations.Count;
@@ -238,6 +247,73 @@ namespace RimBridge.State
                 if (t.def.useHitPoints && t.HitPoints < t.MaxHitPoints) damaged++;
             }
             return new JObject { ["stacks"] = stacks, ["forbidden"] = forbidden, ["food_stacks"] = food, ["rotting"] = rotting, ["corpses"] = corpses, ["unroofed_deteriorating"] = unroofed, ["damaged"] = damaged, ["by_category"] = JObject.FromObject(byCat.OrderByDescending(kv => kv.Value).Take(10).ToDictionary(kv => kv.Key, kv => kv.Value)), ["storage_cells_free"] = FreeStorageCells(map) };
+        }
+
+        /// <summary>
+        /// A zone, and for a stockpile whether it is actually protecting what is in it.
+        ///
+        /// The roof check used to exist only in OutsideStorage, which skips stored things, so a stockpile could
+        /// rot in the open while every number in the payload looked healthy.
+        /// </summary>
+        public static JObject ZoneBrief(Zone z, Map map)
+        {
+            var o = new JObject
+            {
+                ["label"] = z.label,
+                ["type"] = z is Zone_Growing zg ? "growing:" + zg.GetPlantDefToGrow()?.defName : (z is Zone_Stockpile ? "stockpile" : z.GetType().Name),
+                ["cells"] = z.Cells.Count,
+                ["at"] = Cell(z.Cells.Count > 0 ? z.Cells[0] : IntVec3.Invalid),
+            };
+            if (!(z is Zone_Stockpile)) return o;
+            int unroofed = 0, stacks = 0, deteriorating = 0, rotting = 0;
+            foreach (var c in z.Cells)
+            {
+                bool roofed = c.Roofed(map);
+                if (!roofed) unroofed++;
+                foreach (var th in c.GetThingList(map))
+                {
+                    if (!th.def.EverStorable(false)) continue;
+                    stacks++;
+                    if (th.def.CanEverDeteriorate && !roofed) deteriorating++;
+                    var rot = th.TryGetComp<CompRottable>();
+                    if (rot != null && rot.Stage != RotStage.Fresh) rotting++;
+                }
+            }
+            o["unroofed_cells"] = unroofed;
+            o["stacks"] = stacks;
+            o["problems"] = new JArray(StorageRules.Problems(z.Cells.Count, unroofed, deteriorating, rotting));
+            return o;
+        }
+
+        /// <summary>Human-edible nutrition lying outside storage, and how much of it is merely forbidden.</summary>
+        public sealed class LooseFoodTally
+        {
+            public float Nutrition;
+            public float Forbidden;
+        }
+
+        /// <summary>
+        /// Food on the ground is food. Forbidden food is food too: unforbidding is a single action, so reporting a
+        /// famine because nobody has claimed the drop-pod loot yet is the same lie wearing a different hat. It is
+        /// reported separately -- nutrition_forbidden -- so the model can see the action it needs to take, but it
+        /// is not subtracted from what the colony has.
+        /// </summary>
+        public static LooseFoodTally LooseFood(Map map)
+        {
+            var t = new LooseFoodTally();
+            foreach (var th in map.listerThings.ThingsInGroup(ThingRequestGroup.HaulableEver))
+            {
+                if (!th.Spawned || th.IsInAnyStorage()) continue;   // stored nutrition is already in resourceCounter
+                var def = th.def;
+                if (!def.IsNutritionGivingIngestible || def.ingestible == null || !def.ingestible.HumanEdible) continue;
+                var rot = th.TryGetComp<CompRottable>();
+                bool fresh = rot == null || rot.Stage == RotStage.Fresh;
+                if (!FoodRules.CountsAsFood(true, fresh, th.Position.Fogged(map))) continue;
+                float n = def.GetStatValueAbstract(StatDefOf.Nutrition) * th.stackCount;
+                t.Nutrition += n;
+                if (th.IsForbidden(Faction.OfPlayer)) t.Forbidden += n;
+            }
+            return t;
         }
 
         static int FreeStorageCells(Map map)

@@ -34,6 +34,7 @@
     <Compile Include="../Source/State/AlertLogic.cs" />
     <Compile Include="../Source/State/ObservationRules.cs" />
     <Compile Include="../Source/State/FoodRules.cs" />
+    <Compile Include="../Source/State/StorageRules.cs" />
   </ItemGroup>
 
 </Project>
