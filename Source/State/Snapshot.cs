@@ -60,8 +60,7 @@ namespace RimBridge.State
             o["home_center"] = Cell(HomeCenter(map));
             o["colonist_list"] = new JArray(cols.Select(p => PawnBrief(p)));
             var hostiles = VisibleHostiles(map);
-            o["hostiles"] = new JArray(hostiles.Take(60).Select(t => (JToken)HostileHandle(map, t)));
-            if (hostiles.Count > 60) o["hostiles_truncated"] = hostiles.Count;
+            o["hostiles"] = Engine.Render.Truncated(new JArray(hostiles.Take(60).Select(t => (JToken)HostileHandle(map, t))), hostiles.Count, 60);
             o["alerts"] = Alerts();
             var problems = HuntingProblems(map);
             if (problems.Count > 0) o["problems"] = new JArray(problems);
@@ -156,6 +155,7 @@ namespace RimBridge.State
             if (p.InMentalState) o["mental_state"] = p.MentalStateDef?.defName;
             if (p.health.hediffSet.BleedRateTotal > 0.01f) o["bleeding"] = Math.Round(p.health.hediffSet.BleedRateTotal, 2);
             if (p.health.HasHediffsNeedingTend()) o["needs_tending"] = true;
+            // Top 3 on purpose, not a truncation: the brief reports what a pawn is for, not every skill.
             var top = p.skills?.skills?.Where(s => !s.TotallyDisabled).OrderByDescending(s => s.Level).Take(3).Select(s => $"{s.def.defName} {s.Level}{(s.passion == Passion.Major ? "!!" : s.passion == Passion.Minor ? "!" : "")}");
             if (top != null) o["top_skills"] = string.Join(", ", top);
             o["weapon"] = p.equipment?.Primary?.LabelCap.ToString();
@@ -270,7 +270,7 @@ namespace RimBridge.State
                 if (t.def.CanEverDeteriorate && !t.Position.Roofed(map)) unroofed++;   // deteriorates in the open (rain/sun)
                 if (t.def.useHitPoints && t.HitPoints < t.MaxHitPoints) damaged++;
             }
-            return new JObject { ["stacks"] = stacks, ["forbidden"] = forbidden, ["food_stacks"] = food, ["rotting"] = rotting, ["corpses"] = corpses, ["unroofed_deteriorating"] = unroofed, ["damaged"] = damaged, ["by_category"] = JObject.FromObject(byCat.OrderByDescending(kv => kv.Value).Take(10).ToDictionary(kv => kv.Key, kv => kv.Value)), ["storage_cells_free"] = FreeStorageCells(map) };
+            return new JObject { ["stacks"] = stacks, ["forbidden"] = forbidden, ["food_stacks"] = food, ["rotting"] = rotting, ["corpses"] = corpses, ["unroofed_deteriorating"] = unroofed, ["damaged"] = damaged, ["by_category"] = Engine.Render.Truncated(JObject.FromObject(byCat.OrderByDescending(kv => kv.Value).Take(10).ToDictionary(kv => kv.Key, kv => kv.Value)), byCat.Count, 10), ["storage_cells_free"] = FreeStorageCells(map) };
         }
 
         /// <summary>
@@ -352,9 +352,10 @@ namespace RimBridge.State
         public static JArray RoomDigest(Map map)
         {
             var arr = new JArray();
-            foreach (var r in map.regionGrid.AllRooms.Where(r => !r.PsychologicallyOutdoors && !r.TouchesMapEdge && r.CellCount < 2000 && r.Role != null && r.Role != RoomRoleDefOf.None).OrderByDescending(r => r.CellCount).Take(12))
+            var rooms = map.regionGrid.AllRooms.Where(r => !r.PsychologicallyOutdoors && !r.TouchesMapEdge && r.CellCount < 2000 && r.Role != null && r.Role != RoomRoleDefOf.None).OrderByDescending(r => r.CellCount).ToList();
+            foreach (var r in rooms.Take(12))
                 arr.Add(new JObject { ["role"] = r.Role.defName, ["cells"] = r.CellCount, ["temp"] = Math.Round(r.Temperature), ["impressiveness"] = Math.Round(r.GetStat(RoomStatDefOf.Impressiveness)), ["owners"] = string.Join(",", r.Owners.Select(x => x.LabelShort)), ["at"] = Cell(r.Cells.FirstOrDefault()) });
-            return arr;
+            return Engine.Render.Truncated(arr, rooms.Count, 12);
         }
 
         public static IntVec3 HomeCenter(Map map)

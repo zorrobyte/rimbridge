@@ -43,7 +43,8 @@ namespace RimBridge.State
                 "all" => map.mapPawns.AllPawnsSpawned,
                 _ => throw new RpcError("filter must be colonists|prisoners|animals|hostiles|wild|all"),
             };
-            return new JArray(q.Take(200).Select(x => x.IsColonist ? Snapshot.PawnBrief(x) : (JToken)Render.PawnHandle(x)));
+            var pawns = q.ToList();
+            return Render.Truncated(new JArray(pawns.Take(200).Select(x => x.IsColonist ? Snapshot.PawnBrief(x) : (JToken)Render.PawnHandle(x))), pawns.Count, 200);
         }
 
         [Rpc("state.pawn", "{pawn: id|name} full pawn detail: skills, traits, health, needs, mood thoughts, gear, work priorities, schedule, policies, relations")]

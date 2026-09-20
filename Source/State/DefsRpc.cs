@@ -42,7 +42,7 @@ namespace RimBridge.State
                         o["research_done"] = td.IsResearchFinished;
                         if (td.building != null) { o["passable"] = td.passability.ToString(); o["power"] = td.GetCompProperties<CompProperties_Power>()?.PowerConsumption; o["is_bed"] = td.IsBed; o["work_table"] = td.IsWorkTable; }
                         var recipes = td.AllRecipes;
-                        if (recipes != null && recipes.Count > 0) o["recipes"] = new JArray(recipes.Take(60).Select(r => r.defName + (r.AvailableNow ? "" : " (locked)")));
+                        if (recipes != null && recipes.Count > 0) o["recipes"] = Render.Truncated(new JArray(recipes.Take(60).Select(r => r.defName + (r.AvailableNow ? "" : " (locked)"))), recipes.Count, 60);
                     }
                     if (td.IsWeapon) { o["weapon"] = true; o["ranged"] = td.IsRangedWeapon; var v = td.Verbs?.FirstOrDefault(); if (v != null) { o["range"] = v.range; o["warmup"] = v.warmupTime; o["burst"] = v.burstShotCount; o["damage"] = v.defaultProjectile?.projectile?.GetDamageAmount(null); } }
                     if (td.IsApparel) { o["apparel"] = true; o["layers"] = new JArray(td.apparel.layers.Select(l => l.defName)); o["body_parts"] = new JArray(td.apparel.bodyPartGroups.Select(b => b.defName)); o["armor_sharp"] = Math.Round(td.GetStatValueAbstract(StatDefOf.ArmorRating_Sharp, td.MadeFromStuff ? GenStuff.DefaultStuffFor(td) : null), 2); o["insulation_cold"] = Math.Round(td.GetStatValueAbstract(StatDefOf.Insulation_Cold, td.MadeFromStuff ? GenStuff.DefaultStuffFor(td) : null), 1); }
@@ -50,13 +50,15 @@ namespace RimBridge.State
                     if (td.plant != null) { o["plant"] = new JObject { ["sowable"] = td.plant.Sowable, ["grow_days"] = td.plant.growDays, ["harvest"] = td.plant.harvestedThingDef?.defName, ["yield"] = td.plant.harvestYield, ["min_fertility"] = td.plant.fertilityMin, ["fertility_sensitivity"] = td.plant.fertilitySensitivity, ["min_skill"] = td.plant.sowMinSkill, ["is_tree"] = td.plant.IsTree} ; }
                     if (td.race != null) { o["race"] = new JObject { ["animal"] = td.race.Animal, ["humanlike"] = td.race.Humanlike, ["wildness"] = Math.Round(td.GetStatValueAbstract(StatDefOf.Wildness), 2), ["predator"] = td.race.predator, ["body_size"] = td.race.baseBodySize, ["meat"] = td.GetStatValueAbstract(StatDefOf.MeatAmount), ["trainability"] = td.race.trainability?.defName, ["manhunter_on_damage"] = td.race.manhunterOnDamageChance, ["manhunter_on_tame_fail"] = td.race.manhunterOnTameFailChance }; }
                     if (td.building?.isResourceRock == true) o["mineable"] = new JObject { ["yields"] = td.building.mineableThing?.defName, ["amount"] = td.building.mineableYield };
-                    o["used_by_recipes"] = new JArray(DefDatabase<RecipeDef>.AllDefs.Where(r => r.ingredients.Any(i => i.filter.Allows(td))).Take(30).Select(r => r.defName));
-                    o["made_by_recipes"] = new JArray(DefDatabase<RecipeDef>.AllDefs.Where(r => r.products.Any(pr => pr.thingDef == td)).Take(30).Select(r => r.defName + " @ " + string.Join("/", r.AllRecipeUsers.Select(u => u.defName))));
+                    var usedBy = DefDatabase<RecipeDef>.AllDefs.Where(r => r.ingredients.Any(i => i.filter.Allows(td))).ToList();
+                    o["used_by_recipes"] = Render.Truncated(new JArray(usedBy.Take(30).Select(r => r.defName)), usedBy.Count, 30);
+                    var madeBy = DefDatabase<RecipeDef>.AllDefs.Where(r => r.products.Any(pr => pr.thingDef == td)).ToList();
+                    o["made_by_recipes"] = Render.Truncated(new JArray(madeBy.Take(30).Select(r => r.defName + " @ " + string.Join("/", r.AllRecipeUsers.Select(u => u.defName)))), madeBy.Count, 30);
                     break;
                 case RecipeDef rd:
                     o["work"] = rd.workAmount;
                     o["skill"] = rd.workSkill?.defName; o["min_skill"] = rd.skillRequirements?.FirstOrDefault()?.minLevel;
-                    o["ingredients"] = new JArray(rd.ingredients.Select(i => new JObject { ["count"] = i.GetBaseCount(), ["allowed"] = string.Join("/", i.filter.AllowedThingDefs.Take(8).Select(d => d.defName)) }));
+                    o["ingredients"] = new JArray(rd.ingredients.Select(i => new JObject { ["count"] = i.GetBaseCount(), ["allowed"] = Render.Truncated(new JArray(i.filter.AllowedThingDefs.Take(8).Select(d => d.defName)), i.filter.AllowedThingDefs.Count(), 8) }));
                     o["products"] = new JObject(rd.products.Select(pr => new JProperty(pr.thingDef.defName, pr.count)));
                     o["at"] = new JArray(rd.AllRecipeUsers.Select(u => u.defName));
                     o["research"] = rd.researchPrerequisite?.defName; o["available"] = rd.AvailableNow;

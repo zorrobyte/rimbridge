@@ -132,12 +132,14 @@ namespace RimBridge.State
             var home = Snapshot.HomeCenter(map);
             var rooms = new JArray();
             var inRooms = new HashSet<Thing>();
-            foreach (var r in map.regionGrid.AllRooms.Where(r => IsPlayerRoom(r, map)).OrderBy(r => r.Cells.First().DistanceTo(home)).Take(40))
+            var playerRooms = map.regionGrid.AllRooms.Where(r => IsPlayerRoom(r, map)).OrderBy(r => r.Cells.First().DistanceTo(home)).ToList();
+            foreach (var r in playerRooms.Take(40))
             {
                 rooms.Add(Room(r, map, verbose));
                 foreach (var c in r.Cells) foreach (var t in c.GetThingList(map)) inRooms.Add(t);
                 foreach (var c in r.BorderCells) foreach (var t in c.GetThingList(map)) inRooms.Add(t);
             }
+            Render.Truncated(rooms, playerRooms.Count, 40);
             // player structures not inside any room (walls of unfinished rooms, turrets, traps, outdoor tables...)
             var outside = new Dictionary<string, List<Thing>>();
             foreach (var b in map.listerBuildings.allBuildingsColonist.Concat<Thing>(map.listerThings.ThingsInGroup(ThingRequestGroup.Blueprint)).Concat(map.listerThings.ThingsInGroup(ThingRequestGroup.BuildingFrame)))
@@ -147,7 +149,7 @@ namespace RimBridge.State
                 if (!outside.TryGetValue(def, out var l)) outside[def] = l = new List<Thing>();
                 l.Add(b);
             }
-            var outsideJ = new JObject(outside.OrderByDescending(kv => kv.Value.Count).Take(30).Select(kv => new JProperty(kv.Key, kv.Value.Count <= 6 || verbose ? new JArray(kv.Value.Select(t => (JToken)ThingBrief(t, map))) : (JToken)$"{kv.Value.Count} (e.g. {string.Join(", ", kv.Value.Take(3).Select(t => t.ThingID))})")));
+            var outsideJ = Render.Truncated(new JObject(outside.OrderByDescending(kv => kv.Value.Count).Take(30).Select(kv => new JProperty(kv.Key, kv.Value.Count <= 6 || verbose ? new JArray(kv.Value.Select(t => (JToken)ThingBrief(t, map))) : (JToken)$"{kv.Value.Count} (e.g. {string.Join(", ", kv.Value.Take(3).Select(t => t.ThingID))})"))), outside.Count, 30);
             // trapped colonists: cannot reach the home centre
             var trapped = new JArray();
             foreach (var pw in map.mapPawns.FreeColonistsSpawned)

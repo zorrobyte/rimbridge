@@ -18,6 +18,20 @@ namespace RimBridge.Engine
         public const int MaxItems = 200;
         public const int MaxMembers = 120;
 
+        /// <summary>Mark a truncated array with the full count, as a trailing sentinel element.</summary>
+        public static JArray Truncated(JArray arr, int total, int shown)
+        {
+            if (total > shown) arr.Add(new JObject { ["$truncated"] = total });
+            return arr;
+        }
+
+        /// <summary>Mark a truncated object with the full key count.</summary>
+        public static JObject Truncated(JObject o, int total, int shown)
+        {
+            if (total > shown) o["$truncated"] = total;
+            return o;
+        }
+
         public static JToken Value(object? o, int depth, bool top = false)
         {
             try { return ValueInner(o, depth, top); }
