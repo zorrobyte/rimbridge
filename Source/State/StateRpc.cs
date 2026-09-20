@@ -278,13 +278,14 @@ namespace RimBridge.State
             var map = Map();
             var home = Snapshot.HomeCenter(map);
             var arr = new JArray();
-            foreach (var t in map.attackTargetsCache.TargetsHostileToColony)
+            // Same visibility rule as state.summary. This view used to report everything spawned and merely tag it
+            // fogged:true, which handed the model hostile hives 120 cells away behind unexplored map -- the mirror
+            // of the downed-raider bug: there we hid something a player could see, here we showed something they
+            // could not. Fog decides in both.
+            var tally = Snapshot.Tally(map);
+            foreach (var th in Snapshot.VisibleHostiles(map))
             {
-                var th = t.Thing;
-                if (!th.Spawned) continue;
-                var o = th is Pawn hp ? Render.PawnHandle(hp) : Render.ThingHandle(th);
-                o["dist_home"] = (int)th.Position.DistanceTo(home);
-                o["fogged"] = th.Position.Fogged(map);
+                var o = Snapshot.HostileHandle(map, th);
                 if (th is Pawn pp)
                 {
                     o["weapon"] = pp.equipment?.Primary?.def.defName;
@@ -294,7 +295,9 @@ namespace RimBridge.State
                 }
                 arr.Add(o);
             }
-            return new JObject { ["danger"] = map.dangerWatcher.DangerRating.ToString(), ["threat_points"] = Math.Round(StorytellerUtility.DefaultThreatPointsNow(map)), ["hostiles"] = arr, ["home_center"] = Snapshot.Cell(home) };
+            return new JObject { ["danger"] = map.dangerWatcher.DangerRating.ToString(), ["threat_points"] = Math.Round(StorytellerUtility.DefaultThreatPointsNow(map)), ["hostiles"] = arr, ["home_center"] = Snapshot.Cell(home),
+                ["active"] = tally.Active, ["downed"] = tally.Downed, ["dormant"] = tally.Dormant,
+                ["note"] = "hostiles = what a player can see (fog applies). status: active | downed (on the ground, may recover) | dormant (asleep, not yet awake). danger is RimWorld's own rating and ignores downed and dormant hostiles." };
         }
     }
 }

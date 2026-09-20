@@ -50,7 +50,9 @@ namespace RimBridge.State
             o["growing_now"] = map.mapTemperature.SeasonalTemp > 0; // rough; plants need >0C (>10C for most crops)
             o["home_center"] = Cell(HomeCenter(map));
             o["colonist_list"] = new JArray(cols.Select(p => PawnBrief(p)));
-            o["hostiles"] = new JArray(map.attackTargetsCache.TargetsHostileToColony.Where(t => t.Thing.Spawned && !t.ThreatDisabled(null)).Take(60).Select(t => t.Thing is Pawn hp ? (JToken)Engine.Render.PawnHandle(hp) : Engine.Render.ThingHandle(t.Thing)));
+            var hostiles = VisibleHostiles(map);
+            o["hostiles"] = new JArray(hostiles.Take(60).Select(t => (JToken)HostileHandle(map, t)));
+            if (hostiles.Count > 60) o["hostiles_truncated"] = hostiles.Count;
             o["alerts"] = Alerts();
             o["research_current"] = Find.ResearchManager.GetProject()?.defName;
             o["research_progress"] = Find.ResearchManager.GetProject() is { } rp ? Math.Round(rp.ProgressPercent * 100) : 0;
@@ -66,6 +68,72 @@ namespace RimBridge.State
             o["speed"] = (int)Find.TickManager.CurTimeSpeed;
             o["paused"] = Find.TickManager.Paused;
             return o;
+        }
+
+        /// <summary>
+        /// Everything hostile the player can see. Presence, not danger.
+        ///
+        /// The old filter was RimWorld's own <c>!t.ThreatDisabled(null)</c>, which is true for a dormant sleeper
+        /// AND for a pawn who is merely downed. In episode 1 that erased a raider who was lying 18 cells out with
+        /// a cracked radius and a 5.82 bleed rate: the list went non-empty to empty, which from the model's side
+        /// is indistinguishable from fleeing. It wrote "FLED. No engagement." into its notebook, stood down, and
+        /// cancelled a trap blueprint on the cell her body was blocking.
+        ///
+        /// Now fog decides -- that is what really keeps an unopened ancient danger secret -- and downed/dormant
+        /// ride along as labels. The pawn sweep is deliberate: a downed pawn is threat-disabled and RimWorld is
+        /// free to drop her from attackTargetsCache, so the cache alone cannot be trusted to still hold her.
+        /// </summary>
+        public static List<Thing> VisibleHostiles(Map map)
+        {
+            var seen = new HashSet<Thing>();
+            var list = new List<Thing>();
+            foreach (var t in map.attackTargetsCache.TargetsHostileToColony)
+            {
+                var th = t.Thing;
+                if (th == null) continue;
+                bool dead = th is Pawn dp ? dp.Dead : th.Destroyed;
+                if (!ObservationRules.VisibleHostile(th.Spawned, th.Position.Fogged(map), dead)) continue;
+                if (seen.Add(th)) list.Add(th);
+            }
+            foreach (var p in map.mapPawns.AllPawnsSpawned)
+            {
+                if (p.Dead || p.Faction == Faction.OfPlayer || !p.HostileTo(Faction.OfPlayer)) continue;
+                if (!ObservationRules.VisibleHostile(p.Spawned, p.Position.Fogged(map), p.Dead)) continue;
+                if (seen.Add(p)) list.Add(p);
+            }
+            return list;
+        }
+
+        /// <summary>True when the thing is asleep in the game's own sense (mech cluster, sleeping insects).</summary>
+        public static bool IsDormant(Thing t)
+        {
+            try { var c = t.TryGetComp<CompCanBeDormant>(); return c != null && !c.Awake; }
+            catch { return false; }
+        }
+
+        public static string HostileStatusOf(Thing t)
+            => ObservationRules.HostileStatus(t is Pawn p && p.Downed, IsDormant(t));
+
+        /// <summary>A hostile with its state attached, so "not fighting" can never again read as "not there".</summary>
+        public static JObject HostileHandle(Map map, Thing t)
+        {
+            var o = t is Pawn hp ? Engine.Render.PawnHandle(hp) : Engine.Render.ThingHandle(t);
+            o["status"] = HostileStatusOf(t);
+            o["dist_home"] = (int)t.Position.DistanceTo(HomeCenter(map));
+            if (t is Pawn p)
+            {
+                o["health"] = Math.Round(p.health.summaryHealth.SummaryHealthPercent * 100);
+                if (p.health.hediffSet.BleedRateTotal > 0.01f) o["bleeding"] = Math.Round(p.health.hediffSet.BleedRateTotal, 2);
+            }
+            return o;
+        }
+
+        /// <summary>Visible hostiles split by status. Used by the summary and by the danger ledger event.</summary>
+        public static ObservationRules.HostileTally Tally(Map map)
+        {
+            var tally = new ObservationRules.HostileTally();
+            foreach (var t in VisibleHostiles(map)) tally.Add(HostileStatusOf(t));
+            return tally;
         }
 
         public static JObject PawnBrief(Pawn p)

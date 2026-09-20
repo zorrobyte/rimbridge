@@ -121,10 +121,20 @@ namespace RimBridge.Ledger
         {
             try
             {
-                if (___pawn == null || (!___pawn.IsColonist && !___pawn.IsPrisonerOfColony)) return;
-                EventLedger.Add("pawn_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName, ["colonist"] = ___pawn.IsColonist }, ___pawn.PositionHeld, ___pawn.ThingID);
-                if (___pawn.IsColonist)
-                    EventLedger.Add("colonist_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName }, ___pawn.PositionHeld, ___pawn.ThingID);
+                if (___pawn == null) return;
+                if (___pawn.IsColonist || ___pawn.IsPrisonerOfColony)
+                {
+                    EventLedger.Add("pawn_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName, ["colonist"] = ___pawn.IsColonist }, ___pawn.PositionHeld, ___pawn.ThingID);
+                    if (___pawn.IsColonist)
+                        EventLedger.Add("colonist_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName }, ___pawn.PositionHeld, ___pawn.ThingID);
+                    return;
+                }
+                // Hostiles going down had no event at all, so the only trace of a won fight was the danger rating
+                // dropping -- the very signal that reads as "they left". A downed raider is a prisoner, a corpse or
+                // a pawn who gets back up, and in every case the colony needs to know she is lying there.
+                if (___pawn.Spawned && !___pawn.Position.Fogged(___pawn.Map) && ___pawn.HostileTo(Faction.OfPlayer))
+                    EventLedger.Add("hostile_downed", $"{___pawn.LabelShortCap} ({___pawn.Faction?.Name ?? "no faction"}) downed, still on the map",
+                        new JObject { ["cause"] = dinfo?.Def?.defName, ["faction"] = ___pawn.Faction?.Name }, ___pawn.PositionHeld, ___pawn.ThingID);
             }
             catch (Exception ex) { BridgeLog.Warning("ledger downed: " + ex.Message); }
         }
@@ -472,8 +482,13 @@ namespace RimBridge.Ledger
                         var d = m.dangerWatcher.DangerRating;
                         if (d != _lastDanger)
                         {
-                            int hostiles = m.attackTargetsCache.TargetsHostileToColony.Count(t => t.Thing.Spawned && !t.ThreatDisabled(null));
-                            EventLedger.Add("danger", $"danger {_lastDanger} -> {d} ({hostiles} hostile targets)", new JObject { ["from"] = _lastDanger.ToString(), ["to"] = d.ToString(), ["hostiles"] = hostiles });
+                            // This line is delivered mid-step as URGENT and is often the ONLY thing the model is told
+                            // about a fight. It used to count with the same ThreatDisabled filter as the summary, so a
+                            // raid that ended with a raider bleeding on the ground announced "(0 hostile targets)" --
+                            // which the model reasonably read as "they left", and wrote down as fact.
+                            var tally = State.Snapshot.Tally(m);
+                            EventLedger.Add("danger", State.ObservationRules.DangerText(_lastDanger.ToString(), d.ToString(), tally.Active, tally.Downed, tally.Dormant),
+                                new JObject { ["from"] = _lastDanger.ToString(), ["to"] = d.ToString(), ["hostiles"] = tally.Active, ["downed"] = tally.Downed, ["dormant"] = tally.Dormant });
                             _lastDanger = d;
                         }
                     }

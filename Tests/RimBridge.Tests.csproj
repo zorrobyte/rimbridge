@@ -32,6 +32,8 @@
     <Compile Include="../Source/World/TradeLogic.cs" />
     <Compile Include="../Source/World/MechShuttleGeneLogic.cs" />
     <Compile Include="../Source/State/AlertLogic.cs" />
+    <Compile Include="../Source/State/ObservationRules.cs" />
+    <Compile Include="../Source/State/FoodRules.cs" />
   </ItemGroup>
 
 </Project>
