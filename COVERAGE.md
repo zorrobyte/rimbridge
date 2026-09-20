@@ -34,8 +34,9 @@ Generated 2026-09-20 from `bridge.methods` (87 methods) plus a live playtest.
 
 1. **World layer** — DONE state (`world.overview/tile/caravans/caravan/settlements/settlement/sites/ships`,
    `settlement.abandon`, `caravan.form/stop/reroute/pause`, `pods.list/load/board/launch/cancel` with
-   gift/trade/visit/attack arrivals). Still open: caravan merging mid-travel, shuttles, trade execution
-   at destination (dialog-driven).
+   gift/trade/visit/attack arrivals). Live-verified 2026-09-20: `pods.launch` liftoff (visit),
+   `caravan.form` + full travel, `trade.execute` at destination (buy+sell lines), `caravan.reroute`.
+   Still open: caravan merging mid-travel.
 2. **Quest choices** — DONE detail (`quest.detail`: parts, look targets, linked letters; accept/decline
    already flow through `ui.letter`/`ui.dialog`). Still open: reward choice dialogs for edge cases.
 3. **Diplomacy actions** — DONE detail (`diplomacy.detail`: posture, leader, prisoners held, nearest
@@ -43,16 +44,21 @@ Generated 2026-09-20 from `bridge.methods` (87 methods) plus a live playtest.
    (needs a caravan on site), ally calls.
 4. **Medical bills** — DONE (`medical.bills/options/add_bill/bill`: vanilla CreateSurgeryBill,
    worker legality, implant items, faction-anger warnings).
-5. **Rituals/ideology** — DONE state (`ideo.detail`: precepts, role holders, rituals + obligation
-   begin-targets, development). Starting flows through `ui.press` on the target (player parity).
-6. **Mechs/genes/children/anomaly** — DONE state (`life.detail/children/platforms`: growth tiers,
-   genes, mech charge, holding occupants). Still open: mech work modes, gene extraction actions.
+5. **Rituals/ideology** — DONE state + `ritual.list/start` (vanilla lord job, role auto-fill).
+   Live-verified 2026-09-20: LeaderSpeech start; same-ideo disambiguation; honest refusals for
+   missing roles/behavior. Open: animal-sacrifice positive path (needs slaughter-festival ideo),
+   role-less gatherings (vanilla lord job refuses them; direct-execute path unknown).
+6. **Mechs/genes/children/anomaly** — DONE state + `mech.list/setmode` (live-verified: Lifter→Escort),
+   `gene.status/extract/cancel`. Gene success path open: needs a gene-bearing prisoner/colonist
+   (spawned pawns generate baseliner; hostile downed refused by vanilla `CanAcceptPawn`).
 7. **Alert verbs** — DONE (`alerts.detail`: culprits + suggested fix for 60+ alert classes).
 8. **Power control** — assessed: covered via `ui.press` toggles + `ui.designate`/`ui.build`; no dedicated
    verbs needed.
 7. **Alert resolution verbs** — map each active alert to the action that clears it.
 8. **Power control** — switch/battery/fuel management (currently read-only).
-9. **Trade** — orbital beacons, trade ships, caravan trading sessions via `ui.dialog` parity.
+9. **Trade** — DONE via `trade.execute` (live-verified at settlement); `shuttle.list/launch`
+   (live-verified: passenger-shuttle visit flight). Imperial quest shuttles fly on quest orders
+   (no free-flight verb in vanilla; endpoint reports readiness honestly).
 
 ## Live-test notes (2026-09-20; quicktest colony "bridge", then RimBridgeQuick save)
 
@@ -60,9 +66,9 @@ Generated 2026-09-20 from `bridge.methods` (87 methods) plus a live playtest.
   stale ids rejected by tick age.
 - Decision events firing live: enemy_entered_range, pawn_idle, job_finished, resource_critical.
 - Rescue/tend generation follows vanilla rules (no bed / enemy near / no medicine = no candidate, correctly).
-- Combat execute + pods.launch success still need a live situation (no fuel, no reachable enemy at test time).
-- `game.log_tail` path is macOS-hardcoded; use
-  `%USERPROFILE%\AppData\LocalLow\Ludeon Studios\RimWorld by Ludeon Studios\Player.log` on Windows.
+- Combat execute verified live (draft + melee job vs spawned hostile). `pods.launch` verified
+  live (fuel via launcher-built pod only — dev-spawned pods never link fuel; boarded pawn inside).
+- `game.log_tail` Windows LocalLow path fixed 2026-09-20; `dev.set_need` dead-pawn guard added.
 
 - `pawn_context` + `colony_context` correct; fixed threat filter (`ThreatDisabled`) to match `state.summary`.
 - `decision.candidates` empty on a fresh map is correct (nothing legal yet); `continue_current_job`
@@ -71,5 +77,3 @@ Generated 2026-09-20 from `bridge.methods` (87 methods) plus a live playtest.
   not the bridge). Workgiver class names verified against the 1.6 DLL: `WorkGiver_Miner`,
   `WorkGiver_GrowerHarvest`, `WorkGiver_PlantsCut`, `WorkGiver_GrowerSow`, `WorkGiver_HunterHunt`,
   `WorkGiver_Researcher` (fixed 2026-09-20).
-- `game.log_tail` path is macOS-hardcoded; use
-  `%USERPROFILE%\AppData\LocalLow\Ludeon Studios\RimWorld by Ludeon Studios\Player.log` on Windows.
