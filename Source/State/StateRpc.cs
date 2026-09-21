@@ -121,7 +121,12 @@ namespace RimBridge.State
             return o;
         }
 
-        [Rpc("state.stocks", "{category?: Foods|Manufactured|ResourcesRaw|Medicine|Weapons|Apparel|... , min?: 1} counted resources on the map (stored + loose, unforbidden), grouped by defName")]
+        /// <summary>
+        /// What the colony owns. The doc string used to promise "stored + loose" and the body counted storage only;
+        /// the response note said so honestly, but a note in a response cannot correct a doc string the model read
+        /// when it chose the tool. Now the body matches the promise. See StockRules.
+        /// </summary>
+        [Rpc("state.stocks", "{category?: Foods|Manufactured|ResourcesRaw|Medicine|Weapons|Apparel|... , min?: 1} resources on the map grouped by defName: {total, stored, loose, forbidden}. Counts what is lying on the ground as well as what is in storage; forbidden stacks are included in the total and reported separately")]
         public static JToken Stocks(JObject p)
         {
             var map = Map();
@@ -129,13 +134,24 @@ namespace RimBridge.State
             int min = P.Int(p, "min", 1);
             var o = new JObject();
             ThingCategoryDef? cdef = cat != null ? Lookup.Def<ThingCategoryDef>(cat) : null;
-            foreach (var kv in map.resourceCounter.AllCountedAmounts.OrderByDescending(kv => kv.Value))
+            int looseTotal = 0;
+            foreach (var kv in State.Snapshot.Stocks(map).OrderByDescending(kv => kv.Value.Total))
             {
-                if (kv.Value < min) continue;
+                if (kv.Value.Total < min) continue;
                 if (cdef != null && !(kv.Key.thingCategories?.Any(c => c == cdef || c.Parents.Contains(cdef)) ?? false)) continue;
-                o[kv.Key.defName] = kv.Value;
+                var e = new JObject { ["total"] = kv.Value.Total, ["stored"] = kv.Value.Stored, ["loose"] = kv.Value.Loose };
+                if (kv.Value.Forbidden > 0) e["forbidden"] = kv.Value.Forbidden;
+                o[kv.Key.defName] = e;
+                looseTotal += kv.Value.Loose;
             }
-            return new JObject { ["counted"] = o, ["nutrition"] = Math.Round(map.resourceCounter.TotalHumanEdibleNutrition, 1), ["note"] = "counted = in stockpiles/storage only; use map.find for loose items" };
+            var loose = State.Snapshot.LooseFood(map);
+            return new JObject
+            {
+                ["counted"] = o,
+                ["nutrition"] = Math.Round(map.resourceCounter.TotalHumanEdibleNutrition + loose.Nutrition, 1),
+                ["nutrition_stored"] = Math.Round(map.resourceCounter.TotalHumanEdibleNutrition, 1),
+                ["loose_stacks_counted"] = looseTotal,
+            };
         }
 
         [Rpc("state.research", "current project, available projects (with prerequisites met), finished count")]

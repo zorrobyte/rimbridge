@@ -40,6 +40,7 @@
     <Compile Include="../Source/State/HealthRules.cs" />
     <Compile Include="../Source/State/JobRules.cs" />
     <Compile Include="../Source/State/DesignationRules.cs" />
+    <Compile Include="../Source/State/StockRules.cs" />
   </ItemGroup>
 
 </Project>

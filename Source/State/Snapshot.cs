@@ -301,19 +301,64 @@ namespace RimBridge.State
 
         static readonly string[] KeyDefs = { "WoodLog", "Steel", "Plasteel", "ComponentIndustrial", "Silver", "Gold", "MedicineHerbal", "MedicineIndustrial", "Cloth", "Leather_Plain", "MealSimple", "MealFine", "Pemmican", "RawRice", "RawPotatoes", "RawCorn", "Hay", "Kibble", "Chemfuel", "Uranium", "Jade", "Beer", "SmokeleafJoint", "Penoxycyline" };
 
+        /// <summary>
+        /// Everything the colony owns, by def, split into stored and loose. See StockRules for why loose counts.
+        /// </summary>
+        public static Dictionary<ThingDef, StockRules.Tally> Stocks(Map map)
+        {
+            var d = new Dictionary<ThingDef, StockRules.Tally>();
+            // resourceCounter is exactly the stored half, so it is taken as-is and the loose half added beside it.
+            foreach (var kv in map.resourceCounter.AllCountedAmounts)
+            {
+                if (kv.Key == null || kv.Value <= 0) continue;
+                Tally(d, kv.Key).Add(kv.Value, stored: true, forbidden: false);
+            }
+            foreach (var th in map.listerThings.ThingsInGroup(ThingRequestGroup.HaulableEver))
+            {
+                if (th?.def == null || !th.def.CountAsResource) continue;
+                if (!StockRules.CountsAsStock(th.Spawned, th.Position.Fogged(map))) continue;
+                if (th.IsInAnyStorage()) continue;   // already counted above
+                Tally(d, th.def).Add(th.stackCount, stored: false, forbidden: th.IsForbidden(Faction.OfPlayer));
+            }
+            return d;
+        }
+
+        static StockRules.Tally Tally(Dictionary<ThingDef, StockRules.Tally> d, ThingDef def)
+        {
+            if (!d.TryGetValue(def, out var t)) { t = new StockRules.Tally(); d[def] = t; }
+            return t;
+        }
+
+        static int CountIn(Dictionary<ThingDef, StockRules.Tally> stocks, ThingCategoryDef cat, bool looseOnly = false)
+        {
+            int n = 0;
+            foreach (var kv in stocks)
+                if (kv.Key.thingCategories != null && kv.Key.thingCategories.Contains(cat))
+                    n += looseOnly ? kv.Value.Loose : kv.Value.Total;
+            return n;
+        }
+
         public static JObject KeyStocks(Map map)
         {
+            var stocks = Stocks(map);
             var o = new JObject();
+            var unhauled = new JObject();
             foreach (var d in KeyDefs)
             {
                 var def = DefDatabase<ThingDef>.GetNamedSilentFail(d);
                 if (def == null) continue;
-                int n = map.resourceCounter.GetCount(def);
-                if (n > 0) o[d] = n;
+                stocks.TryGetValue(def, out var t);
+                // Always emitted, including 0. An omitted key cannot be told from an unreported one, and this is
+                // the brief the model reads every step -- a missing WoodLog is exactly how "we have no wood" was
+                // read off a map with 521 wood on it.
+                o[d] = t?.Total ?? 0;
+                if (t != null && t.Loose > 0) unhauled[d] = t.Loose;
             }
-            o["meat_all"] = map.resourceCounter.GetCountIn(ThingCategoryDefOf.MeatRaw);
-            o["stone_blocks"] = map.resourceCounter.GetCountIn(ThingCategoryDefOf.StoneBlocks);
-            o["meals_all"] = map.resourceCounter.GetCountIn(DefDatabase<ThingCategoryDef>.GetNamed("FoodMeals"));
+            o["meat_all"] = CountIn(stocks, ThingCategoryDefOf.MeatRaw);
+            o["stone_blocks"] = CountIn(stocks, ThingCategoryDefOf.StoneBlocks);
+            o["meals_all"] = CountIn(stocks, DefDatabase<ThingCategoryDef>.GetNamed("FoodMeals"));
+            // What is owned but not yet carried in. Stated, not acted on: the hauling decision is the model's.
+            if (unhauled.Count > 0) o["unhauled"] = unhauled;
             return o;
         }
 

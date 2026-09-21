@@ -436,20 +436,22 @@ namespace RimBridge.Ui
             // targetsBodyPart false and apply to the whole pawn. Those must not be made to invent an arm. The gate
             // is therefore the recipe's own flag AND the parts the game actually offers -- GetPartsToApplyOn can
             // yield a null entry for a whole-body recipe, so nulls are dropped before the list is counted.
-            if (bill is Bill_Medical bm && t is Pawn patient)
+            if (t is Pawn patient)
             {
-                var options = (recipe.Worker.GetPartsToApplyOn(patient, recipe) ?? Enumerable.Empty<BodyPartRecord>())
-                    .Where(b => b != null).ToList();
-                bool needsPart = recipe.targetsBodyPart && options.Count > 0;
+                // The first version of this gate predicted whether a part was needed, from recipe.targetsBodyPart
+                // AND a non-empty options list, and then trusted its own prediction. Live, RemoveBodyPart sailed
+                // through it and queued a part-less bill labelled "Remove part" on a healthy colonist -- exactly
+                // the silent failure finding 14 is about, now produced by the fix for it.
+                //
+                // So the gate no longer predicts. It tries to set a part, and then CHECKS THE OUTCOME: a surgery
+                // that targets a part and still has none is refused, whatever the reason. The counts are reported
+                // in the refusal so the next failure names its own cause instead of needing another live run.
+                var options = new List<BodyPartRecord>();
+                try { options.AddRange((recipe.Worker?.GetPartsToApplyOn(patient, recipe) ?? Enumerable.Empty<BodyPartRecord>()).Where(b => b != null)); }
+                catch (Exception ex) { BridgeLog.Warning("GetPartsToApplyOn failed for " + recipe.defName + ": " + ex.Message); }
                 var wanted = p["part"] != null ? P.Str(p, "part") : null;
-                if (!needsPart)
-                {
-                    // Said out loud rather than dropped, so a caller who passed a part is not left believing it applied.
-                    if (!string.IsNullOrEmpty(wanted)) whole_body_note = $"{recipe.defName} applies to the whole pawn; 'part' ({wanted}) was ignored";
-                    if (recipe.targetsBodyPart && options.Count == 0)
-                        throw new RpcError($"{recipe.defName} targets a body part and none is applicable on {patient.LabelShort} right now");
-                }
-                else
+
+                if (options.Count > 0)
                 {
                     if (string.IsNullOrEmpty(wanted))
                         throw new RpcError($"{recipe.defName} targets a body part; pass 'part'. Valid parts on {patient.LabelShort}: " + string.Join(", ", options.Select(b => b.Label)));
@@ -458,8 +460,18 @@ namespace RimBridge.Ui
                             ?? options.FirstOrDefault(b => b.Label != null && b.Label.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0);
                     if (part == null)
                         throw new RpcError($"no body part '{wanted}' on {patient.LabelShort} for {recipe.defName}. Valid parts: " + string.Join(", ", options.Select(b => b.Label)));
-                    bm.Part = part;
+                    if (bill is Bill_Medical medical) medical.Part = part;
                 }
+                else if (!string.IsNullOrEmpty(wanted))
+                {
+                    // Said out loud rather than dropped, so a caller who passed a part is not left believing it applied.
+                    whole_body_note = $"{recipe.defName} offered no body parts on {patient.LabelShort}; 'part' ({wanted}) was not applied";
+                }
+
+                // The outcome check. Nothing above has to be right for this to hold.
+                if (recipe.targetsBodyPart && (!(bill is Bill_Medical done) || done.Part == null))
+                    throw new RpcError($"{recipe.defName} targets a body part and no part could be set on {patient.LabelShort}, so the bill was refused rather than queued part-less. " +
+                                       $"parts offered: {options.Count}; bill type: {bill.GetType().Name}; part requested: {(string.IsNullOrEmpty(wanted) ? "none" : wanted)}");
             }
             bill.ingredientSearchRadius = P.Float(p, "radius", 999f);
             bill.suspended = P.Bool(p, "suspended", false);
