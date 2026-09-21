@@ -148,7 +148,6 @@ namespace RimBridge.GameCtl
             return new JObject { ["dev_mode"] = Prefs.DevMode, ["god_mode"] = DebugSettings.godMode };
         }
 
-        [Rpc("game.log_tail", "{lines?: 100, filter?: substring} tail Player.log", MainThread = false)]
         static string WinPlayerLog()
         {
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -158,6 +157,7 @@ namespace RimBridge.GameCtl
             return Path.Combine(low, "Ludeon Studios", "RimWorld by Ludeon Studios", "Player.log");
         }
 
+        [Rpc("game.log_tail", "{lines?: 100, filter?: substring} tail Player.log", MainThread = false)]
         public static JToken LogTail(JObject p)
         {
             int n = P.Int(p, "lines", 100);
@@ -174,8 +174,8 @@ namespace RimBridge.GameCtl
             return string.Join("\n", tail);
         }
 
-        [Rpc("bridge.methods", "list all rpc methods with docs", MainThread = false)]
-        public static JToken Methods(JObject p) => Rpc.Describe();
+        [Rpc("bridge.methods", "{filter?: substring matched against the method name} list rpc methods with docs", MainThread = false)]
+        public static JToken Methods(JObject p) => Rpc.Describe(P.OptStr(p, "filter"));
 
         public static void RequirePlaying()
         {

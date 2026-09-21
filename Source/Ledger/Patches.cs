@@ -121,10 +121,20 @@ namespace RimBridge.Ledger
         {
             try
             {
-                if (___pawn == null || (!___pawn.IsColonist && !___pawn.IsPrisonerOfColony)) return;
-                EventLedger.Add("pawn_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName, ["colonist"] = ___pawn.IsColonist }, ___pawn.PositionHeld, ___pawn.ThingID);
-                if (___pawn.IsColonist)
-                    EventLedger.Add("colonist_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName }, ___pawn.PositionHeld, ___pawn.ThingID);
+                if (___pawn == null) return;
+                if (___pawn.IsColonist || ___pawn.IsPrisonerOfColony)
+                {
+                    EventLedger.Add("pawn_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName, ["colonist"] = ___pawn.IsColonist }, ___pawn.PositionHeld, ___pawn.ThingID);
+                    if (___pawn.IsColonist)
+                        EventLedger.Add("colonist_downed", $"{___pawn.LabelShortCap} downed", new JObject { ["cause"] = dinfo?.Def?.defName }, ___pawn.PositionHeld, ___pawn.ThingID);
+                    return;
+                }
+                // Hostiles going down had no event at all, so the only trace of a won fight was the danger rating
+                // dropping -- the very signal that reads as "they left". A downed raider is a prisoner, a corpse or
+                // a pawn who gets back up, and in every case the colony needs to know she is lying there.
+                if (___pawn.Spawned && !___pawn.Position.Fogged(___pawn.Map) && ___pawn.HostileTo(Faction.OfPlayer))
+                    EventLedger.Add("hostile_downed", $"{___pawn.LabelShortCap} ({___pawn.Faction?.Name ?? "no faction"}) downed, still on the map",
+                        new JObject { ["cause"] = dinfo?.Def?.defName, ["faction"] = ___pawn.Faction?.Name }, ___pawn.PositionHeld, ___pawn.ThingID);
             }
             catch (Exception ex) { BridgeLog.Warning("ledger downed: " + ex.Message); }
         }
@@ -209,18 +219,56 @@ namespace RimBridge.Ledger
         }
     }
 
+    /// <summary>
+    /// The raid alarm.
+    ///
+    /// This used to emit in the AddLord postfix, and a Lord is created BEFORE its pawns are attached and before its
+    /// LordJob is set. Both were empty every time, so every raid the model was ever woken for announced itself as
+    /// "hostile group: Toxin Outfit x0 ()" -- zero raiders, unknown mission. state.threats was correct all along;
+    /// only the alarm, which is the part that wakes the model mid-step, was wrong.
+    ///
+    /// So the lord is queued here and read a tick later, once the game has populated it.
+    /// </summary>
     [HarmonyPatch(typeof(LordManager), nameof(LordManager.AddLord))]
     static class Patch_LordAdd
     {
+        internal static readonly List<(Lord lord, int queuedTick)> Pending = new List<(Lord, int)>();
+
+        /// <summary>Give up waiting after a second and report what we have, so an alarm is never silently dropped.</summary>
+        internal const int DeadlineTicks = 60;
+
         static void Postfix(Lord newLord)
         {
             try
             {
                 if (newLord.faction == null || !newLord.faction.HostileTo(Faction.OfPlayer)) return;
-                EventLedger.Add("hostile_group", $"hostile group: {newLord.faction.Name} x{newLord.ownedPawns.Count} ({newLord.LordJob?.GetType().Name})",
-                    new JObject { ["faction"] = newLord.faction.Name, ["count"] = newLord.ownedPawns.Count, ["job"] = newLord.LordJob?.GetType().Name, ["lord"] = newLord.loadID });
+                Pending.Add((newLord, Find.TickManager.TicksGame));
             }
             catch (Exception ex) { BridgeLog.Warning("ledger lord: " + ex.Message); }
+        }
+
+        /// <summary>Emit every queued lord that is ready, or that has waited long enough. Called once per tick.</summary>
+        internal static void Flush()
+        {
+            if (Pending.Count == 0) return;
+            var now = Find.TickManager.TicksGame;
+            for (int i = Pending.Count - 1; i >= 0; i--)
+            {
+                var (lord, queued) = Pending[i];
+                var ready = lord.ownedPawns != null && lord.ownedPawns.Count > 0 && lord.LordJob != null;
+                // now < queued means the clock moved backwards (a save was loaded); flush rather than wait forever.
+                if (!ready && now >= queued && now - queued < DeadlineTicks) continue;
+                Pending.RemoveAt(i);
+                try
+                {
+                    if (lord.faction == null) continue;
+                    var count = lord.ownedPawns?.Count ?? 0;
+                    var job = lord.LordJob?.GetType().Name;
+                    EventLedger.Add("hostile_group", $"hostile group: {lord.faction.Name} x{count} ({job})",
+                        new JObject { ["faction"] = lord.faction.Name, ["count"] = count, ["job"] = job, ["lord"] = lord.loadID });
+                }
+                catch (Exception ex) { BridgeLog.Warning("ledger lord flush: " + ex.Message); }
+            }
         }
     }
 
@@ -453,6 +501,13 @@ namespace RimBridge.Ledger
     {
         private int _lastDay = -1;
         private StoryDanger _lastDanger = StoryDanger.None;
+        // Who is being carried off, and which infections we have already announced. Both are "has this started?"
+        // questions, and neither had an event: the model's whole trigger history for the raid that cost it a
+        // colonist was four wakes, none of which was the chase, the kidnap or the interception.
+        // Keyed by pawn id, holding the label, because the pawn we most need to name is the one that just left the map:
+        // the "gone" lookup ran against AllPawnsSpawned and so answered null in exactly the kidnapping case.
+        private readonly Dictionary<int, string> _carried = new Dictionary<int, string>();
+        private readonly HashSet<string> _infections = new HashSet<string>();
         public LedgerComponent(Game game) { }
 
         public override void FinalizeInit()
@@ -460,10 +515,93 @@ namespace RimBridge.Ledger
             EventLedger.Add("game", "game loaded/started", new JObject { ["day"] = GenDate.DaysPassed });
         }
 
+        /// <summary>
+        /// A colonist being carried away, and how close the carrier is to leaving with them.
+        ///
+        /// There was no pawn_kidnapped kind, no "hostile carrying a colonist" and no "hostile near the map edge".
+        /// The only related kind was hostile_group_gone, which fires once the raider has left -- the one moment
+        /// the information is worth nothing. The model slept three in-game hours through a kidnapping because
+        /// nothing in its wake_on list could fire for one.
+        /// </summary>
+        void WatchCarried(Map m)
+        {
+            if (m == null) return;
+            var seen = new HashSet<int>();
+            foreach (var p in m.mapPawns.AllPawnsSpawned)
+            {
+                if (p.Faction == null || !p.HostileTo(Faction.OfPlayer)) continue;
+                if (!(p.carryTracker?.CarriedThing is Pawn victim)) continue;
+                if (victim.Faction != Faction.OfPlayer) continue;
+                seen.Add(victim.thingIDNumber);
+                int edge = EdgeDistance(m, p.Position);
+                if (!_carried.ContainsKey(victim.thingIDNumber))
+                {
+                    _carried[victim.thingIDNumber] = victim.LabelShort;
+                    EventLedger.Add("colonist_carried", $"{p.LabelShortCap} is carrying {victim.LabelShortCap} at {State.Snapshot.CellText(p.Position)}, {edge} cells from the map edge",
+                        new JObject { ["colonist"] = victim.LabelShort, ["carrier"] = p.LabelShort, ["pos"] = State.Snapshot.Cell(p.Position), ["edge_distance"] = edge });
+                }
+            }
+            foreach (var id in _carried.Keys.Where(i => !seen.Contains(i)).ToList())
+            {
+                string label = _carried[id];
+                _carried.Remove(id);
+                var who = m.mapPawns.AllPawnsSpawned.FirstOrDefault(x => x.thingIDNumber == id);
+                // On the map or off it is the whole difference between a rescue and a kidnapping, and it is the one
+                // thing we can state without guessing. What it means is the reader's call.
+                var data = new JObject { ["colonist"] = label, ["on_map"] = who != null };
+                if (who != null) { data["pos"] = State.Snapshot.Cell(who.Position); data["downed"] = who.Downed; }
+                EventLedger.Add("colonist_carried_gone",
+                    who != null
+                        ? $"{label} is no longer being carried, and is on the map at {State.Snapshot.CellText(who.Position)}{(who.Downed ? ", downed" : "")}"
+                        : $"{label} is no longer being carried, and is not on the map",
+                    data);
+            }
+        }
+
+        static int EdgeDistance(Map m, IntVec3 c)
+            => Math.Max(0, Math.Min(Math.Min(c.x, c.z), Math.Min(m.Size.x - 1 - c.x, m.Size.z - 1 - c.z)));
+
+        /// <summary>
+        /// A new immunizable condition on a colonist, announced when it starts.
+        ///
+        /// The per-step brief now carries severity, immunity and both rates, but a step the model is asleep
+        /// through carries nothing. An infection at severity 0.02 is cheap to treat and invisible; the game's own
+        /// Alert_LifeThreateningHediff fires only after the cheap-intervention window has closed.
+        ///
+        /// The event states that it started and where. What it means is the reader's to decide.
+        /// </summary>
+        void WatchInfections(Map m)
+        {
+            if (m == null) return;
+            var live = new HashSet<string>();
+            foreach (var p in m.mapPawns.FreeColonists)
+            {
+                foreach (var h in p.health.hediffSet.hediffs)
+                {
+                    if (!h.Visible || h.TryGetComp<HediffComp_Immunizable>() == null) continue;
+                    var key = p.thingIDNumber + ":" + h.def.defName + ":" + (h.Part?.Label ?? "whole");
+                    live.Add(key);
+                    if (!_infections.Add(key)) continue;
+                    double imm = 0;
+                    try { imm = p.health.immunity.GetImmunity(h.def); } catch { }
+                    EventLedger.Add("infection", $"{p.LabelShortCap}: {h.LabelCap}{(h.Part != null ? " (" + h.Part.Label + ")" : "")} severity {Math.Round(h.Severity, 2)}, immunity {Math.Round(imm, 2)}",
+                        new JObject { ["colonist"] = p.LabelShort, ["hediff"] = h.def.defName, ["part"] = h.Part?.Label, ["severity"] = Math.Round(h.Severity, 2), ["immunity"] = Math.Round(imm, 2) });
+                }
+            }
+            _infections.RemoveWhere(k => !live.Contains(k));
+        }
+
         public override void GameComponentTick()
         {
+            // Not rate-limited: a raid alarm one tick late is the point, a raid alarm a second late is not.
+            try { Patch_LordAdd.Flush(); }
+            catch (Exception ex) { BridgeLog.Warning("lord flush: " + ex.Message); }
             if (Find.TickManager.TicksGame % 60 == 0)
             {
+                try { WatchCarried(Find.CurrentMap); }
+                catch (Exception ex) { BridgeLog.Warning("carried watch: " + ex.Message); }
+                try { WatchInfections(Find.CurrentMap); }
+                catch (Exception ex) { BridgeLog.Warning("infection watch: " + ex.Message); }
                 try
                 {
                     var m = Find.CurrentMap;
@@ -472,8 +610,13 @@ namespace RimBridge.Ledger
                         var d = m.dangerWatcher.DangerRating;
                         if (d != _lastDanger)
                         {
-                            int hostiles = m.attackTargetsCache.TargetsHostileToColony.Count(t => t.Thing.Spawned && !t.ThreatDisabled(null));
-                            EventLedger.Add("danger", $"danger {_lastDanger} -> {d} ({hostiles} hostile targets)", new JObject { ["from"] = _lastDanger.ToString(), ["to"] = d.ToString(), ["hostiles"] = hostiles });
+                            // This line is delivered mid-step as URGENT and is often the ONLY thing the model is told
+                            // about a fight. It used to count with the same ThreatDisabled filter as the summary, so a
+                            // raid that ended with a raider bleeding on the ground announced "(0 hostile targets)" --
+                            // which the model reasonably read as "they left", and wrote down as fact.
+                            var tally = State.Snapshot.Tally(m);
+                            EventLedger.Add("danger", State.ObservationRules.DangerText(_lastDanger.ToString(), d.ToString(), tally.Active, tally.Downed, tally.Dormant),
+                                new JObject { ["from"] = _lastDanger.ToString(), ["to"] = d.ToString(), ["hostiles"] = tally.Active, ["downed"] = tally.Downed, ["dormant"] = tally.Dormant });
                             _lastDanger = d;
                         }
                     }

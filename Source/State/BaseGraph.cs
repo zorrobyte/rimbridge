@@ -62,6 +62,7 @@ namespace RimBridge.State
             if (r.Temperature < 5) problems.Add($"cold ({Math.Round(r.Temperature)}C)");
             if (r.Temperature > 30) problems.Add($"hot ({Math.Round(r.Temperature)}C)");
             if (freeInterior == 0 && cells.Count > 1) problems.Add("no free floor");
+            foreach (var line in DiningProblems(r, map)) problems.Add(line);
             var o = new JObject
             {
                 ["id"] = r.ID,
@@ -80,6 +81,36 @@ namespace RimBridge.State
             var (an, arect) = AnchorComponent.Nearest(rect.CenterCell);
             if (an != null && arect.Overlaps(rect)) o["anchor"] = an;
             return o;
+        }
+
+        /// <summary>
+        /// Whether a room lets a pawn eat seated at a table.
+        ///
+        /// Game rule (1.6): a table is any thing whose <c>def.surfaceType</c> is <c>Eat</c>. <c>ThingDef.IsTable</c>
+        /// is the wrong test here, because it also demands a CompGatherSpot that the eating path never checks.
+        /// A chair works only when a table is the edifice of one of its 4 cardinal neighbours.
+        /// </summary>
+        static List<string> DiningProblems(Room r, Map map)
+        {
+            var tables = new HashSet<Thing>();
+            var chairs = new HashSet<Thing>();
+            foreach (var c in r.Cells)
+            {
+                var e = c.GetEdifice(map);
+                if (e != null && e.def.surfaceType == SurfaceType.Eat) tables.Add(e);
+                foreach (var t in c.GetThingList(map)) if (IsChair(t)) chairs.Add(t);
+            }
+            if (tables.Count == 0) return new List<string>();
+            int chairsAtTable = chairs.Count(ch => Cardinal(ch.Position, map).Any(n => n.GetEdifice(map)?.def.surfaceType == SurfaceType.Eat));
+            int tablesWithChair = tables.Count(tb => tb.OccupiedRect().Cells.SelectMany(c => Cardinal(c, map)).Any(n => n.GetThingList(map).Any(IsChair)));
+            return DiningRules.Problems(tables.Count, chairs.Count, chairsAtTable, tablesWithChair);
+        }
+
+        static bool IsChair(Thing t) => t.def.building != null && t.def.building.isSittable;
+
+        static IEnumerable<IntVec3> Cardinal(IntVec3 c, Map map)
+        {
+            foreach (var d in GenAdj.CardinalDirections) { var n = c + d; if (n.InBounds(map)) yield return n; }
         }
 
         public static JObject ThingBrief(Thing t, Map map)
@@ -101,12 +132,14 @@ namespace RimBridge.State
             var home = Snapshot.HomeCenter(map);
             var rooms = new JArray();
             var inRooms = new HashSet<Thing>();
-            foreach (var r in map.regionGrid.AllRooms.Where(r => IsPlayerRoom(r, map)).OrderBy(r => r.Cells.First().DistanceTo(home)).Take(40))
+            var playerRooms = map.regionGrid.AllRooms.Where(r => IsPlayerRoom(r, map)).OrderBy(r => r.Cells.First().DistanceTo(home)).ToList();
+            foreach (var r in playerRooms.Take(40))
             {
                 rooms.Add(Room(r, map, verbose));
                 foreach (var c in r.Cells) foreach (var t in c.GetThingList(map)) inRooms.Add(t);
                 foreach (var c in r.BorderCells) foreach (var t in c.GetThingList(map)) inRooms.Add(t);
             }
+            Render.Truncated(rooms, playerRooms.Count, 40);
             // player structures not inside any room (walls of unfinished rooms, turrets, traps, outdoor tables...)
             var outside = new Dictionary<string, List<Thing>>();
             foreach (var b in map.listerBuildings.allBuildingsColonist.Concat<Thing>(map.listerThings.ThingsInGroup(ThingRequestGroup.Blueprint)).Concat(map.listerThings.ThingsInGroup(ThingRequestGroup.BuildingFrame)))
@@ -116,7 +149,7 @@ namespace RimBridge.State
                 if (!outside.TryGetValue(def, out var l)) outside[def] = l = new List<Thing>();
                 l.Add(b);
             }
-            var outsideJ = new JObject(outside.OrderByDescending(kv => kv.Value.Count).Take(30).Select(kv => new JProperty(kv.Key, kv.Value.Count <= 6 || verbose ? new JArray(kv.Value.Select(t => (JToken)ThingBrief(t, map))) : (JToken)$"{kv.Value.Count} (e.g. {string.Join(", ", kv.Value.Take(3).Select(t => t.ThingID))})")));
+            var outsideJ = Render.Truncated(new JObject(outside.OrderByDescending(kv => kv.Value.Count).Take(30).Select(kv => new JProperty(kv.Key, kv.Value.Count <= 6 || verbose ? new JArray(kv.Value.Select(t => (JToken)ThingBrief(t, map))) : (JToken)$"{kv.Value.Count} (e.g. {string.Join(", ", kv.Value.Take(3).Select(t => t.ThingID))})"))), outside.Count, 30);
             // trapped colonists: cannot reach the home centre
             var trapped = new JArray();
             foreach (var pw in map.mapPawns.FreeColonistsSpawned)

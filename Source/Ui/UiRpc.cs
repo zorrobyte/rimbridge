@@ -197,7 +197,21 @@ namespace RimBridge.Ui
             return new JObject { ["ok"] = ok, ["pawn"] = pawn.LabelShort, ["cell"] = State.Snapshot.Cell(cell), ["drafted"] = pawn.Drafted };
         }
 
-        [Rpc("ui.attack", "{pawn, target: thingId, melee?: bool} drafted attack order")]
+        /// <summary>
+        /// A drafted attack order, and whether the pawn can actually carry it out from where they stand.
+        ///
+        /// The melee branch chases; AttackStatic has no goto toil, so a RANGED pawn does not move to bring a
+        /// target into range, and endIfCantShootTargetFromCurPos = false then stops the dead job from ending, so
+        /// the pawn holds it and falls back to nothing. The call returned ok: true either way and the asymmetry
+        /// was invisible from the tool surface. A colonist was carried off the map while her rescuer stood still
+        /// 35 cells away with a revolver, order accepted, response honest, nothing happening.
+        ///
+        /// The default behaviour is unchanged, because standing to shoot is what the game itself does and what a
+        /// player right-clicking an enemy gets. What changes is that the response now says whether the pawn can
+        /// hit from here, how far the target is and how far the weapon reaches -- and <c>approach</c> closes the
+        /// distance when the caller asks for that. Choosing between them is the caller's.
+        /// </summary>
+        [Rpc("ui.attack", "{pawn, target: thingId, melee?: bool, approach?: bool} drafted attack order. Reports can_hit_from_here, distance and weapon_range; a ranged pawn does NOT move to close range unless approach=true")]
         public static JToken Attack(JObject p)
         {
             Map();
@@ -205,22 +219,66 @@ namespace RimBridge.Ui
             var target = Lookup.ThingOrNull(P.Str(p, "target")) ?? Lookup.Pawn(P.Str(p, "target"));
             if (pawn.drafter != null && !pawn.Drafted) pawn.drafter.Drafted = true;
             bool melee = P.Bool(p, "melee", pawn.equipment?.Primary == null || pawn.equipment.Primary.def.IsMeleeWeapon);
+            bool approach = P.Bool(p, "approach", false);
+
+            var verb = melee ? pawn.meleeVerbs?.TryGetMeleeVerb(target) : pawn.TryGetAttackVerb(target, false);
+            bool canHit = verb != null && verb.CanHitTarget(target);
+            double range = verb != null ? Math.Round(verb.verbProps.range, 1) : 0;
+            double dist = Math.Round(pawn.Position.DistanceTo(target.Position), 1);
+
+            var res = new JObject
+            {
+                ["pawn"] = pawn.LabelShort,
+                ["target"] = target.ThingID,
+                ["melee"] = melee,
+                ["distance"] = dist,
+                ["weapon_range"] = range,
+                ["can_hit_from_here"] = canHit,
+            };
+
+            // Move first only when asked. TryFindCastPosition is the game's own "where would I shoot this from".
+            bool moved = false;
+            if (approach && !canHit && !melee && verb != null)
+            {
+                var req = new CastPositionRequest { caster = pawn, target = target, verb = verb, maxRangeFromTarget = verb.verbProps.range, wantCoverFromTarget = true };
+                if (CastPositionFinder.TryFindCastPosition(req, out IntVec3 spot) && spot != pawn.Position)
+                {
+                    var goTo = JobMaker.MakeJob(JobDefOf.Goto, spot);
+                    goTo.playerForced = true;
+                    pawn.jobs.TryTakeOrderedJob(goTo, JobTag.DraftedOrder);
+                    res["moving_to"] = State.Snapshot.Cell(spot);
+                    moved = true;
+                }
+                else res["approach_failed"] = "no position found within weapon range with a clear shot";
+            }
+
             Job job;
             if (melee) job = JobMaker.MakeJob(JobDefOf.AttackMelee, target);
             else { job = JobMaker.MakeJob(JobDefOf.AttackStatic, target); job.endIfCantShootTargetFromCurPos = false; }
             job.playerForced = true;
             if (target is Pawn tp) pawn.mindState.enemyTarget = tp;
-            bool ok = pawn.jobs.TryTakeOrderedJob(job, JobTag.DraftedOrder);
+            // Queued behind the approach, so the pawn walks and then shoots rather than dropping the walk.
+            bool ok = pawn.jobs.TryTakeOrderedJob(job, JobTag.DraftedOrder, moved);
             Hooks.RaiseManualTouch(pawn, "ui.attack");
-            return new JObject { ["ok"] = ok, ["pawn"] = pawn.LabelShort, ["target"] = target.ThingID, ["melee"] = melee };
+            res["ok"] = ok;
+            // Why there is no shot, separated: distance and a blocked line need opposite actions.
+            string? why = State.AttackRules.Reason(canHit, melee, moved, dist, range);
+            if (why != null)
+            {
+                res["no_shot"] = why;
+                res["note"] = State.AttackRules.Note(canHit, melee, moved, dist, range);
+            }
+            res["now"] = State.Snapshot.JobText(pawn);
+            return res;
         }
 
-        [Rpc("ui.job", "{pawn, job: JobDef, target?: [x,z]|thingId, target_b?, target_c?, count?, queue?: false} give a pawn a specific job directly (e.g. Ingest, Equip, Wear, TakeInventory, HaulToCell, Rescue, TendPatient, LayDown, Research). Prefer ui.order when possible.")]
+        [Rpc("ui.job", "{pawn, job: JobDef, target?: [x,z]|thingId, target_b?, target_c?, count?, queue?: false} give a pawn a specific job directly (e.g. Ingest with target = a downed pawn feeds them, Equip, Wear, TakeInventory, HaulToCell, Rescue, TendPatient, LayDown, Research). Prefer ui.order when possible.")]
         public static JToken JobRpc(JObject p)
         {
             Map();
             var pawn = Lookup.Colonist(P.Str(p, "pawn"));
             var def = Lookup.Def<JobDef>(P.Str(p, "job"));
+            string before = State.Snapshot.JobText(pawn);
             var job = JobMaker.MakeJob(def);
             if (p["target"] != null) job.targetA = (LocalTargetInfo)Coerce.To(p["target"], typeof(LocalTargetInfo))!;
             if (p["target_b"] != null) job.targetB = (LocalTargetInfo)Coerce.To(p["target_b"], typeof(LocalTargetInfo))!;
@@ -239,7 +297,12 @@ namespace RimBridge.Ui
                 // a drafted pawn's job, or an attack/move job, is manual military control: the combat order leaves the pawn alone for an hour
                 Hooks.RaiseManualTouch(pawn, "ui.job:" + def.defName);
             }
-            return new JObject { ["ok"] = ok, ["pawn"] = pawn.LabelShort, ["job"] = def.defName, ["now"] = State.Snapshot.JobText(pawn) };
+            // RimWorld ends the running job at the end of the tick, so reading the pawn back here still shows the old
+            // one. Reporting that as "now" read as a refusal that had returned ok: true. Both are named instead.
+            string after = State.Snapshot.JobText(pawn);
+            var o = new JObject { ["ok"] = ok, ["pawn"] = pawn.LabelShort, ["job"] = def.defName, ["was"] = before, ["now"] = after };
+            if (ok && after == before) o["note"] = "accepted; the pawn changes job at the end of this tick, so 'now' still names the previous one";
+            return o;
         }
 
         [Rpc("ui.cancel_job", "{pawn} interrupt the pawn's current job (and undraft if drafted=false given)")]
@@ -247,9 +310,15 @@ namespace RimBridge.Ui
         {
             Map();
             var pawn = Lookup.Colonist(P.Str(p, "pawn"));
+            // Same end-of-tick trap as ui.job: the job is read back in the tick it was ended, so a bare
+            // "job" field names the one that was cancelled and an accepted cancel reads as a no-op.
+            string was = State.Snapshot.JobText(pawn);
             pawn.jobs.EndCurrentJob(JobCondition.InterruptForced, true);
             pawn.jobs.ClearQueuedJobs();
-            return new JObject { ["pawn"] = pawn.LabelShort, ["job"] = State.Snapshot.JobText(pawn) };
+            string now = State.Snapshot.JobText(pawn);
+            var res = new JObject { ["pawn"] = pawn.LabelShort, ["was"] = was, ["now"] = now };
+            if (was == now) res["note"] = "cancelled; the pawn changes job at the end of this tick, so 'now' still names the previous one";
+            return res;
         }
 
         // ---------- Work / schedule / policies ----------
@@ -342,7 +411,17 @@ namespace RimBridge.Ui
 
         // ---------- Bills ----------
 
-        [Rpc("ui.add_bill", "{thing: work table id (aliases: station/table/bench), recipe: RecipeDef, mode?: RepeatCount|TargetCount|Forever, count?: 1, radius?: 999, suspended?: false, first?: false}")]
+        /// <summary>
+        /// Add a bill to a work table -- or a surgery to a pawn, which is the same call and was never documented.
+        ///
+        /// A medical recipe reached every guard here and succeeded, because a Pawn is a Thing, is an IBillGiver,
+        /// and Human.AllRecipes contains RemoveBodyPart. What it could not do was say WHICH ARM: there was no part
+        /// parameter and MakeNewBill() leaves Bill_Medical.Part null. The call returned an id and a label and
+        /// created a bill that names no part. Silence is worse than a refusal -- the model concluded surgery was
+        /// unavailable and went looking for a TableSurgery def that does not exist, while an operator queued the
+        /// amputation by hand.
+        /// </summary>
+        [Rpc("ui.add_bill", "{thing: work table id OR a pawn id for surgery (aliases: station/table/bench/pawn), recipe: RecipeDef, part?: body part label or def (REQUIRED for surgery on a part; the error lists the valid parts), mode?: RepeatCount|TargetCount|Forever, count?: 1, radius?: 999, suspended?: false, first?: false}")]
         public static JToken AddBill(JObject p)
         {
             Map();
@@ -351,12 +430,14 @@ namespace RimBridge.Ui
                 : p["station"] != null ? P.Str(p, "station")
                 : p["table"] != null ? P.Str(p, "table")
                 : p["bench"] != null ? P.Str(p, "bench")
-                : throw new RpcError("missing param 'thing' (the work table id; aliases station/table/bench also accepted)");
+                : p["pawn"] != null ? P.Str(p, "pawn")
+                : throw new RpcError("missing param 'thing' (the work table id, or a pawn id for surgery; aliases station/table/bench/pawn also accepted)");
             var t = Lookup.Thing(thingId);
             if (!(t is IBillGiver bg)) throw new RpcError($"{t.ThingID} has no bill stack");
             var recipe = Lookup.Def<RecipeDef>(P.Str(p, "recipe"));
             if (!t.def.AllRecipes.Contains(recipe)) throw new RpcError($"{t.def.defName} cannot do {recipe.defName}. Available: " + string.Join(", ", t.def.AllRecipes.Where(r => r.AvailableNow).Select(r => r.defName)));
             if (!recipe.AvailableNow) throw new RpcError("recipe not available now (research?)");
+            string whole_body_note = null;
             var bill = recipe.MakeNewBill();
             if (bill is Bill_Production bp)
             {
@@ -365,11 +446,58 @@ namespace RimBridge.Ui
                 int count = P.Int(p, "count", 1);
                 if (bp.repeatMode == BillRepeatModeDefOf.TargetCount) bp.targetCount = count; else bp.repeatCount = count;
             }
+            // A surgery that targets a body part must name one. Refused rather than created part-less.
+            //
+            // Not every medical recipe takes a part: Anesthetize, Euthanize and AdministerMechSerumHealer all set
+            // targetsBodyPart false and apply to the whole pawn. Those must not be made to invent an arm. The gate
+            // is therefore the recipe's own flag AND the parts the game actually offers -- GetPartsToApplyOn can
+            // yield a null entry for a whole-body recipe, so nulls are dropped before the list is counted.
+            if (t is Pawn patient)
+            {
+                // The first version of this gate predicted whether a part was needed, from recipe.targetsBodyPart
+                // AND a non-empty options list, and then trusted its own prediction. Live, RemoveBodyPart sailed
+                // through it and queued a part-less bill labelled "Remove part" on a healthy colonist -- exactly
+                // the silent failure finding 14 is about, now produced by the fix for it.
+                //
+                // So the gate no longer predicts. It tries to set a part, and then CHECKS THE OUTCOME: a surgery
+                // that targets a part and still has none is refused, whatever the reason. The counts are reported
+                // in the refusal so the next failure names its own cause instead of needing another live run.
+                var options = new List<BodyPartRecord>();
+                try { options.AddRange((recipe.Worker?.GetPartsToApplyOn(patient, recipe) ?? Enumerable.Empty<BodyPartRecord>()).Where(b => b != null)); }
+                catch (Exception ex) { BridgeLog.Warning("GetPartsToApplyOn failed for " + recipe.defName + ": " + ex.Message); }
+                var wanted = p["part"] != null ? P.Str(p, "part") : null;
+
+                if (options.Count > 0)
+                {
+                    if (string.IsNullOrEmpty(wanted))
+                        throw new RpcError($"{recipe.defName} targets a body part; pass 'part'. Valid parts on {patient.LabelShort}: " + string.Join(", ", options.Select(b => b.Label)));
+                    var part = options.FirstOrDefault(b => string.Equals(b.Label, wanted, StringComparison.OrdinalIgnoreCase))
+                            ?? options.FirstOrDefault(b => string.Equals(b.def?.defName, wanted, StringComparison.OrdinalIgnoreCase))
+                            ?? options.FirstOrDefault(b => b.Label != null && b.Label.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (part == null)
+                        throw new RpcError($"no body part '{wanted}' on {patient.LabelShort} for {recipe.defName}. Valid parts: " + string.Join(", ", options.Select(b => b.Label)));
+                    if (bill is Bill_Medical medical) medical.Part = part;
+                }
+                else if (!string.IsNullOrEmpty(wanted))
+                {
+                    // Said out loud rather than dropped, so a caller who passed a part is not left believing it applied.
+                    whole_body_note = $"{recipe.defName} offered no body parts on {patient.LabelShort}; 'part' ({wanted}) was not applied";
+                }
+
+                // The outcome check. Nothing above has to be right for this to hold.
+                if (recipe.targetsBodyPart && (!(bill is Bill_Medical done) || done.Part == null))
+                    throw new RpcError($"{recipe.defName} targets a body part and no part could be set on {patient.LabelShort}, so the bill was refused rather than queued part-less. " +
+                                       $"parts offered: {options.Count}; bill type: {bill.GetType().Name}; part requested: {(string.IsNullOrEmpty(wanted) ? "none" : wanted)}");
+            }
             bill.ingredientSearchRadius = P.Float(p, "radius", 999f);
             bill.suspended = P.Bool(p, "suspended", false);
             bg.BillStack.AddBill(bill);
             if (P.Bool(p, "first", false)) bg.BillStack.Reorder(bill, -bg.BillStack.Count);
-            return new JObject { ["id"] = bill.GetUniqueLoadID(), ["label"] = bill.LabelCap, ["table"] = t.ThingID };
+            var res = new JObject { ["id"] = bill.GetUniqueLoadID(), ["label"] = bill.LabelCap, ["table"] = t.ThingID };
+            if (bill is Bill_Medical med && med.Part != null) res["part"] = med.Part.Label;
+            if (whole_body_note != null) res["note"] = whole_body_note;
+            if (t is Pawn surgeryPatient) res["surgery_bills"] = new JArray(surgeryPatient.BillStack.Bills.Select(b => (JToken)b.LabelCap.ToString()).ToArray());
+            return res;
         }
 
         [Rpc("ui.bill", "{thing, id|index, action: delete|suspend|resume|top|set, count?, mode?, radius?} modify a bill")]

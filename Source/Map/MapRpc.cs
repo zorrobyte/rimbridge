@@ -251,7 +251,9 @@ namespace RimBridge.MapView
                 if (reach != null && !reach.CanReach(t, PathEndMode.Touch, Danger.Some)) continue;
                 var o = t is Pawn pw ? Render.PawnHandle(pw) : Render.ThingHandle(t);
                 o["dist"] = (int)d;
-                if (t.IsForbidden(Faction.OfPlayer)) o["forbidden"] = true;
+                // Always emitted, not only when true: the model cannot tell an omitted key from an unreported one,
+                // and it spent 4 of its 10 first-step calls writing run_python to reconstruct exactly this flag.
+                o["forbidden"] = t.IsForbidden(Faction.OfPlayer);
                 if (t is Plant pl2) { o["growth"] = Math.Round(pl2.Growth, 2); o["harvestable"] = pl2.HarvestableNow; }
                 if (t.def.building?.isResourceRock == true) o["yields"] = t.def.building.mineableThing?.defName + " x" + t.def.building.mineableYield;
                 if (t is Corpse cp) { o["rotting"] = cp.GetRotStage().ToString(); o["of"] = cp.InnerPawn?.kindDef?.defName; }

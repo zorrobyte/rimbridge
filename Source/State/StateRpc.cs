@@ -43,10 +43,11 @@ namespace RimBridge.State
                 "all" => map.mapPawns.AllPawnsSpawned,
                 _ => throw new RpcError("filter must be colonists|prisoners|animals|hostiles|wild|all"),
             };
-            return new JArray(q.Take(200).Select(x => x.IsColonist ? Snapshot.PawnBrief(x) : (JToken)Render.PawnHandle(x)));
+            var pawns = q.ToList();
+            return Render.Truncated(new JArray(pawns.Take(200).Select(x => x.IsColonist ? Snapshot.PawnBrief(x) : (JToken)Render.PawnHandle(x))), pawns.Count, 200);
         }
 
-        [Rpc("state.pawn", "{pawn: id|name} full pawn detail: skills, traits, health, needs, mood thoughts, gear, work priorities, schedule, policies, relations")]
+        [Rpc("state.pawn", "{pawn: id|name} full pawn detail: skills, traits, health, needs, mood thoughts, gear, work priorities, schedule, policies, relations. Each need is {pct, level, state?} where 100 is fully satisfied: Food 100 is fed, Food 0 is starving, and eating raises it.")]
         public static JToken Pawn(JObject p)
         {
             var pawn = Lookup.Pawn(P.Str(p, "pawn"));
@@ -72,13 +73,17 @@ namespace RimBridge.State
             o["pain"] = Math.Round(pawn.health.hediffSet.PainTotal * 100);
             o["bleeding"] = Math.Round(pawn.health.hediffSet.BleedRateTotal, 2);
             o["needs_tending"] = pawn.health.HasHediffsNeedingTend();
+            // Finding 14: state.pawn did not report pending surgery at all, so a queued amputation was invisible
+            // in the one call that is meant to answer "what is going on with this colonist?".
+            var surgery = pawn.BillStack?.Bills?.Select(b => new JObject { ["id"] = b.GetUniqueLoadID(), ["recipe"] = b.recipe?.defName, ["label"] = b.LabelCap.ToString(), ["part"] = (b as Bill_Medical)?.Part?.Label, ["suspended"] = b.suspended }).ToList();
+            if (surgery != null && surgery.Count > 0) o["surgery_bills"] = new JArray(surgery.Select(x => (JToken)x));
             o["in_bed"] = pawn.InBed();
             o["medical_care"] = pawn.playerSettings?.medCare.ToString();
             o["hostility_response"] = pawn.playerSettings?.hostilityResponse.ToString();
             // Needs & mood
             if (pawn.needs != null)
             {
-                o["needs"] = new JObject(pawn.needs.AllNeeds.Select(n => new JProperty(n.def.defName, Math.Round(n.CurLevelPercentage * 100))));
+                o["needs"] = new JObject(pawn.needs.AllNeeds.Select(n => new JProperty(n.def.defName, NeedValue(n))));
                 if (pawn.needs.mood != null)
                 {
                     var thoughts = new List<Thought>();
@@ -116,7 +121,12 @@ namespace RimBridge.State
             return o;
         }
 
-        [Rpc("state.stocks", "{category?: Foods|Manufactured|ResourcesRaw|Medicine|Weapons|Apparel|... , min?: 1} counted resources on the map (stored + loose, unforbidden), grouped by defName")]
+        /// <summary>
+        /// What the colony owns. The doc string used to promise "stored + loose" and the body counted storage only;
+        /// the response note said so honestly, but a note in a response cannot correct a doc string the model read
+        /// when it chose the tool. Now the body matches the promise. See StockRules.
+        /// </summary>
+        [Rpc("state.stocks", "{category?: Foods|Manufactured|ResourcesRaw|Medicine|Weapons|Apparel|... , min?: 1} resources on the map grouped by defName: {total, stored, loose, forbidden}. Counts what is lying on the ground as well as what is in storage; forbidden stacks are included in the total and reported separately")]
         public static JToken Stocks(JObject p)
         {
             var map = Map();
@@ -124,13 +134,24 @@ namespace RimBridge.State
             int min = P.Int(p, "min", 1);
             var o = new JObject();
             ThingCategoryDef? cdef = cat != null ? Lookup.Def<ThingCategoryDef>(cat) : null;
-            foreach (var kv in map.resourceCounter.AllCountedAmounts.OrderByDescending(kv => kv.Value))
+            int looseTotal = 0;
+            foreach (var kv in State.Snapshot.Stocks(map).OrderByDescending(kv => kv.Value.Total))
             {
-                if (kv.Value < min) continue;
+                if (kv.Value.Total < min) continue;
                 if (cdef != null && !(kv.Key.thingCategories?.Any(c => c == cdef || c.Parents.Contains(cdef)) ?? false)) continue;
-                o[kv.Key.defName] = kv.Value;
+                var e = new JObject { ["total"] = kv.Value.Total, ["stored"] = kv.Value.Stored, ["loose"] = kv.Value.Loose };
+                if (kv.Value.Forbidden > 0) e["forbidden"] = kv.Value.Forbidden;
+                o[kv.Key.defName] = e;
+                looseTotal += kv.Value.Loose;
             }
-            return new JObject { ["counted"] = o, ["nutrition"] = Math.Round(map.resourceCounter.TotalHumanEdibleNutrition, 1), ["note"] = "counted = in stockpiles/storage only; use map.find for loose items" };
+            var loose = State.Snapshot.LooseFood(map);
+            return new JObject
+            {
+                ["counted"] = o,
+                ["nutrition"] = Math.Round(map.resourceCounter.TotalHumanEdibleNutrition + loose.Nutrition, 1),
+                ["nutrition_stored"] = Math.Round(map.resourceCounter.TotalHumanEdibleNutrition, 1),
+                ["loose_stacks_counted"] = looseTotal,
+            };
         }
 
         [Rpc("state.research", "current project, available projects (with prerequisites met), finished count")]
@@ -218,7 +239,8 @@ namespace RimBridge.State
             return arr;
         }
 
-        [Rpc("state.bills", "{thing: id} bills on a work table")]
+        /// <summary>Bills on a work table -- or the surgeries queued on a pawn, which is the same call.</summary>
+        [Rpc("state.bills", "{thing: id} bills on a work table, or the surgery bills queued on a pawn (pass the pawn id)")]
         public static JToken Bills(JObject p)
         {
             var t = Lookup.Thing(P.Str(p, "thing"));
@@ -228,6 +250,7 @@ namespace RimBridge.State
                 ["id"] = b.GetUniqueLoadID(), ["recipe"] = b.recipe.defName, ["label"] = b.LabelCap, ["suspended"] = b.suspended,
                 ["mode"] = (b as Bill_Production)?.repeatMode?.defName, ["target"] = (b as Bill_Production)?.targetCount, ["repeat"] = (b as Bill_Production)?.repeatCount,
                 ["ingredient_radius"] = b.ingredientSearchRadius, ["paused"] = (b as Bill_Production)?.paused,
+                ["part"] = (b as Bill_Medical)?.Part?.Label,
             }));
         }
 
@@ -252,11 +275,29 @@ namespace RimBridge.State
             return arr;
         }
 
-        [Rpc("state.areas", "allowed areas (Home, animal pens, custom)")]
+        [Rpc("state.areas", "allowed areas (Home, animal pens, custom) with how many of their cells are roofed and indoors")]
         public static JToken Areas(JObject p)
         {
             var map = Map();
-            return new JArray(map.areaManager.AllAreas.Select(a => new JObject { ["label"] = a.Label, ["cells"] = a.TrueCount, ["mutable"] = a.Mutable }));
+            return new JArray(map.areaManager.AllAreas.Select(a =>
+            {
+                // A pawn restricted to an area is only sheltered if the area is sheltered, and "it exists and has
+                // cells" does not say that. An outdoor rectangle named PetSafe read as a safe room for a whole
+                // episode while the cat stood in it and was shot. Counted, not judged.
+                int roofed = 0, indoors = 0, n = 0;
+                foreach (var c in a.ActiveCells)
+                {
+                    n++;
+                    if (c.Roofed(map)) roofed++;
+                    var room = c.GetRoom(map);
+                    if (room != null && !room.PsychologicallyOutdoors && !room.TouchesMapEdge) indoors++;
+                }
+                return new JObject
+                {
+                    ["label"] = a.Label, ["cells"] = a.TrueCount, ["mutable"] = a.Mutable,
+                    ["roofed_cells"] = roofed, ["indoor_cells"] = indoors, ["counted"] = n,
+                };
+            }));
         }
 
         [Rpc("state.policies", "apparel/food/drug/reading policies available")]
@@ -278,13 +319,14 @@ namespace RimBridge.State
             var map = Map();
             var home = Snapshot.HomeCenter(map);
             var arr = new JArray();
-            foreach (var t in map.attackTargetsCache.TargetsHostileToColony)
+            // Same visibility rule as state.summary. This view used to report everything spawned and merely tag it
+            // fogged:true, which handed the model hostile hives 120 cells away behind unexplored map -- the mirror
+            // of the downed-raider bug: there we hid something a player could see, here we showed something they
+            // could not. Fog decides in both.
+            var tally = Snapshot.Tally(map);
+            foreach (var th in Snapshot.VisibleHostiles(map))
             {
-                var th = t.Thing;
-                if (!th.Spawned) continue;
-                var o = th is Pawn hp ? Render.PawnHandle(hp) : Render.ThingHandle(th);
-                o["dist_home"] = (int)th.Position.DistanceTo(home);
-                o["fogged"] = th.Position.Fogged(map);
+                var o = Snapshot.HostileHandle(map, th);
                 if (th is Pawn pp)
                 {
                     o["weapon"] = pp.equipment?.Primary?.def.defName;
@@ -294,7 +336,27 @@ namespace RimBridge.State
                 }
                 arr.Add(o);
             }
-            return new JObject { ["danger"] = map.dangerWatcher.DangerRating.ToString(), ["threat_points"] = Math.Round(StorytellerUtility.DefaultThreatPointsNow(map)), ["hostiles"] = arr, ["home_center"] = Snapshot.Cell(home) };
+            return new JObject { ["danger"] = map.dangerWatcher.DangerRating.ToString(), ["threat_points"] = Math.Round(StorytellerUtility.DefaultThreatPointsNow(map)), ["hostiles"] = arr, ["home_center"] = Snapshot.Cell(home),
+                ["active"] = tally.Active, ["downed"] = tally.Downed, ["dormant"] = tally.Dormant,
+                ["note"] = "hostiles = what a player can see (fog applies). status: active | downed (on the ground, may recover) | dormant (asleep, not yet awake). danger is RimWorld's own rating and ignores downed and dormant hostiles." };
+        }
+
+        /// <summary>
+        /// A need as a number plus, where the game defines one, its own word for the state.
+        /// The bare percentage was read backwards twice in one episode: "Food need 88% (very hungry)", and then
+        /// 88 falling to 70 read as the pawn being fed. 100 is satisfied and feeding raises it, but nothing in a
+        /// lone scalar says so. `level` keeps the 0-1 fraction so an existing reader still finds a number.
+        /// </summary>
+        static JObject NeedValue(Need n)
+        {
+            var o = new JObject
+            {
+                ["pct"] = Math.Round(n.CurLevelPercentage * 100),
+                ["level"] = Math.Round(n.CurLevelPercentage, 3),
+            };
+            if (n is Need_Food f) o["state"] = f.CurCategory.ToString();
+            else if (n is Need_Rest r) o["state"] = r.CurCategory.ToString();
+            return o;
         }
     }
 }

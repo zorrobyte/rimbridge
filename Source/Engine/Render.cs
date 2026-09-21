@@ -18,6 +18,20 @@ namespace RimBridge.Engine
         public const int MaxItems = 200;
         public const int MaxMembers = 120;
 
+        /// <summary>Mark a truncated array with the full count, as a trailing sentinel element.</summary>
+        public static JArray Truncated(JArray arr, int total, int shown)
+        {
+            if (total > shown) arr.Add(new JObject { ["$truncated"] = total });
+            return arr;
+        }
+
+        /// <summary>Mark a truncated object with the full key count.</summary>
+        public static JObject Truncated(JObject o, int total, int shown)
+        {
+            if (total > shown) o["$truncated"] = total;
+            return o;
+        }
+
         public static JToken Value(object? o, int depth, bool top = false)
         {
             try { return ValueInner(o, depth, top); }
@@ -66,7 +80,9 @@ namespace RimBridge.Engine
                     case Room rm: return new JObject { ["room"] = rm.ID, ["role"] = rm.Role?.defName, ["cells"] = rm.CellCount };
                     case Job j: return new JObject { ["def"] = j.def?.defName, ["target"] = j.targetA.IsValid ? Value(j.targetA, 0) : null, ["forced"] = j.playerForced };
                     case LocalTargetInfo lt: return lt.HasThing ? Value(lt.Thing, 0) : (lt.IsValid ? new JArray(lt.Cell.x, lt.Cell.z) : JValue.CreateNull());
-                    case Hediff h: return new JObject { ["def"] = h.def.defName, ["label"] = h.LabelCap.ToString(), ["part"] = h.Part?.Label, ["severity"] = Math.Round(h.Severity, 2) };
+                    // tended/tendable are finding 20: without them ten knife cuts look identical before and after
+                    // treatment, and the only honest signal was a boolean in a different call.
+                    case Hediff h: return HediffHandle(h);
                     case SkillRecord sk: return new JObject { ["skill"] = sk.def.defName, ["level"] = sk.Level, ["passion"] = sk.passion.ToString(), ["disabled"] = sk.TotallyDisabled };
                     case Need n: return new JObject { ["need"] = n.def.defName, ["level"] = Math.Round(n.CurLevelPercentage, 2) };
                     case Thought th: return new JObject { ["thought"] = th.def.defName, ["label"] = th.LabelCap.ToString(), ["mood"] = Math.Round(th.MoodOffset(), 1) };
@@ -129,6 +145,24 @@ namespace RimBridge.Engine
             if (t.stackCount > 1) o["count"] = t.stackCount;
             if (t.Faction != null && !t.Faction.IsPlayer) o["faction"] = t.Faction.Name;
             if (t.Destroyed) o["destroyed"] = true;
+            return o;
+        }
+
+        /// <summary>One hediff, including whether anything has been done about it.</summary>
+        public static JObject HediffHandle(Hediff h)
+        {
+            var o = new JObject { ["def"] = h.def.defName, ["label"] = h.LabelCap.ToString(), ["part"] = h.Part?.Label, ["severity"] = Math.Round(h.Severity, 2) };
+            try
+            {
+                var tend = h.TryGetComp<HediffComp_TendDuration>();
+                if (tend != null)
+                {
+                    o["tended"] = tend.IsTended;
+                    if (tend.IsTended) o["tend_quality"] = Math.Round(tend.tendQuality, 2);
+                }
+                if (h.TendableNow(true)) o["tendable_now"] = true;
+            }
+            catch { }
             return o;
         }
 
