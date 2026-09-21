@@ -486,7 +486,13 @@ namespace RimBridge.State
             var arr = new JArray();
             var rooms = map.regionGrid.AllRooms.Where(r => !r.PsychologicallyOutdoors && !r.TouchesMapEdge && r.CellCount < 2000 && r.Role != null && r.Role != RoomRoleDefOf.None).OrderByDescending(r => r.CellCount).ToList();
             foreach (var r in rooms.Take(12))
-                arr.Add(new JObject { ["role"] = r.Role.defName, ["cells"] = r.CellCount, ["temp"] = Math.Round(r.Temperature), ["impressiveness"] = Math.Round(r.GetStat(RoomStatDefOf.Impressiveness)), ["owners"] = string.Join(",", r.Owners.Select(x => x.LabelShort)), ["at"] = Cell(r.Cells.FirstOrDefault()) });
+            {
+                // Impressiveness alone says the room is bad and not which of its four inputs is the cause.
+                // Beauty and cleanliness are the two a colony can move cheaply, and floor names what beauty is
+                // standing on: bare ground is -3 a cell, a plain wood floor is 0.
+                var first = r.Cells.FirstOrDefault();
+                arr.Add(new JObject { ["role"] = r.Role.defName, ["cells"] = r.CellCount, ["temp"] = Math.Round(r.Temperature), ["impressiveness"] = Math.Round(r.GetStat(RoomStatDefOf.Impressiveness)), ["beauty"] = Math.Round(r.GetStat(RoomStatDefOf.Beauty), 1), ["cleanliness"] = Math.Round(r.GetStat(RoomStatDefOf.Cleanliness), 1), ["floor"] = first.IsValid ? first.GetTerrain(map)?.defName : null, ["owners"] = string.Join(",", r.Owners.Select(x => x.LabelShort)), ["at"] = Cell(first) });
+            }
             return Engine.Render.Truncated(arr, rooms.Count, 12);
         }
 

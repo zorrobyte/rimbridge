@@ -20,6 +20,17 @@
   <!-- Verse-free source files only -->
   <ItemGroup>
     <Compile Include="../Source/Engine/PathParser.cs" />
+    <Compile Include="../Source/Server/NameMatch.cs" />
+    <Compile Include="../Source/State/ObservationRules.cs" />
+    <Compile Include="../Source/State/FoodRules.cs" />
+    <Compile Include="../Source/State/StorageRules.cs" />
+    <Compile Include="../Source/State/HuntingRules.cs" />
+    <Compile Include="../Source/State/DiningRules.cs" />
+    <Compile Include="../Source/State/HealthRules.cs" />
+    <Compile Include="../Source/State/JobRules.cs" />
+    <Compile Include="../Source/State/DesignationRules.cs" />
+    <Compile Include="../Source/State/StockRules.cs" />
+    <Compile Include="../Source/State/AttackRules.cs" />
     <Compile Include="../Source/Decision/DecisionLogic.cs" />
     <Compile Include="../Source/World/WorldLogic.cs" />
     <Compile Include="../Source/World/DiplomacyLogic.cs" />
@@ -32,16 +43,6 @@
     <Compile Include="../Source/World/TradeLogic.cs" />
     <Compile Include="../Source/World/MechShuttleGeneLogic.cs" />
     <Compile Include="../Source/State/AlertLogic.cs" />
-    <Compile Include="../Source/Server/NameMatch.cs" />
-    <Compile Include="../Source/State/ObservationRules.cs" />
-    <Compile Include="../Source/State/FoodRules.cs" />
-    <Compile Include="../Source/State/StorageRules.cs" />
-    <Compile Include="../Source/State/HuntingRules.cs" />
-    <Compile Include="../Source/State/DiningRules.cs" />
-    <Compile Include="../Source/State/HealthRules.cs" />
-    <Compile Include="../Source/State/JobRules.cs" />
-    <Compile Include="../Source/State/DesignationRules.cs" />
-    <Compile Include="../Source/State/StockRules.cs" />
   </ItemGroup>
 
 </Project>

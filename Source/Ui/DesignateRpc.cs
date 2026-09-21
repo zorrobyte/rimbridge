@@ -80,7 +80,15 @@ namespace RimBridge.Ui
                                 if (th.def.EverHaulable || th is Building) Hooks.RaiseManualTouch(th, "ui.designate:" + cls);
                 }
             }
-            if (ok == 0 && things == null && cells.Count == 0) throw new RpcError("give cells, rect or things");
+            if (ok == 0 && things == null && cells.Count == 0)
+            {
+                // An empty list is not a missing parameter. Saying "give cells, rect or things" to a caller
+                // that gave cells sends it looking for the wrong bug.
+                var empty = new[] { "cells", "rect", "things" }.Where(k => p[k] != null).ToList();
+                throw new RpcError(empty.Count == 0
+                    ? "give cells, rect or things"
+                    : $"{string.Join(" and ", empty)} given but empty, so there is nothing to designate");
+            }
             return new JObject { ["designator"] = cls, ["applied"] = ok, ["failed"] = failed };
         }
 

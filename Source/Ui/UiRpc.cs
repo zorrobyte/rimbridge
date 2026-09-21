@@ -261,9 +261,13 @@ namespace RimBridge.Ui
             bool ok = pawn.jobs.TryTakeOrderedJob(job, JobTag.DraftedOrder, moved);
             Hooks.RaiseManualTouch(pawn, "ui.attack");
             res["ok"] = ok;
-            // The plain statement of the thing that was silent. Melee chases, so it is only ever said for ranged.
-            if (!canHit && !moved && !melee)
-                res["note"] = "out of range and not moving: AttackStatic has no goto toil, so the pawn holds the job where it stands. The approach parameter closes the distance; ui.goto moves the pawn.";
+            // Why there is no shot, separated: distance and a blocked line need opposite actions.
+            string? why = State.AttackRules.Reason(canHit, melee, moved, dist, range);
+            if (why != null)
+            {
+                res["no_shot"] = why;
+                res["note"] = State.AttackRules.Note(canHit, melee, moved, dist, range);
+            }
             res["now"] = State.Snapshot.JobText(pawn);
             return res;
         }
@@ -306,9 +310,15 @@ namespace RimBridge.Ui
         {
             Map();
             var pawn = Lookup.Colonist(P.Str(p, "pawn"));
+            // Same end-of-tick trap as ui.job: the job is read back in the tick it was ended, so a bare
+            // "job" field names the one that was cancelled and an accepted cancel reads as a no-op.
+            string was = State.Snapshot.JobText(pawn);
             pawn.jobs.EndCurrentJob(JobCondition.InterruptForced, true);
             pawn.jobs.ClearQueuedJobs();
-            return new JObject { ["pawn"] = pawn.LabelShort, ["job"] = State.Snapshot.JobText(pawn) };
+            string now = State.Snapshot.JobText(pawn);
+            var res = new JObject { ["pawn"] = pawn.LabelShort, ["was"] = was, ["now"] = now };
+            if (was == now) res["note"] = "cancelled; the pawn changes job at the end of this tick, so 'now' still names the previous one";
+            return res;
         }
 
         // ---------- Work / schedule / policies ----------

@@ -116,7 +116,10 @@ namespace RimBridge.State
             {
                 if (cat != null && !string.Equals(d.designationCategory.defName, cat, StringComparison.OrdinalIgnoreCase)) continue;
                 var stuff = d.MadeFromStuff ? GenStuff.DefaultStuffFor(d) : null;
-                arr.Add(new JObject { ["def"] = d.defName, ["label"] = d.label, ["category"] = d.designationCategory.defName, ["cost"] = new JObject(d.CostListAdjusted(stuff).Select(c => new JProperty(c.thingDef.defName, c.count))), ["stuff"] = d.MadeFromStuff, ["size"] = d is ThingDef td ? new JArray(td.size.x, td.size.z) : new JArray(1, 1) });
+                // Beauty on the row that chooses the thing. It was reachable only through defs.get, one def at a
+                // time, and only by a caller who already suspected that a floor is a beauty decision.
+                float beauty = d.GetStatValueAbstract(StatDefOf.Beauty, stuff);
+                arr.Add(new JObject { ["def"] = d.defName, ["label"] = d.label, ["category"] = d.designationCategory.defName, ["cost"] = new JObject(d.CostListAdjusted(stuff).Select(c => new JProperty(c.thingDef.defName, c.count))), ["stuff"] = d.MadeFromStuff, ["beauty"] = Math.Round(beauty, 1), ["size"] = d is ThingDef td ? new JArray(td.size.x, td.size.z) : new JArray(1, 1) });
             }
             return arr;
         }
