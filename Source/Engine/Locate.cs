@@ -28,7 +28,7 @@ namespace RimBridge.Engine
             if (t == null || t.Type == JTokenType.Null) throw new RpcError($"missing {what}");
             if (t is JArray a && a.Count >= 2 && a.All(x => x.Type == JTokenType.Integer)) return new IntVec3((int)a[0]!, 0, (int)a[a.Count - 1]!);
             if (t is JObject o && o["x"] != null && o["z"] != null) return new IntVec3((int)o["x"]!, 0, (int)o["z"]!);
-            string s = t.ToString().Trim();
+            string s = P.Flat(t).Trim();
             var parts = s.Split(',');
             if (parts.Length == 2 && int.TryParse(parts[0].Trim(), out int px) && int.TryParse(parts[1].Trim(), out int pz)) return new IntVec3(px, 0, pz);
             var (rect, isRect, rest) = ResolveRef(s, map, what);
@@ -41,8 +41,11 @@ namespace RimBridge.Engine
             if (t == null || t.Type == JTokenType.Null) throw new RpcError($"missing {what}");
             if (t is JArray a && a.Count == 4) return new CellRect((int)a[0]!, (int)a[1]!, (int)a[2]!, (int)a[3]!);
             if (t is JArray a2 && a2.Count == 2 && a2[0] is JArray) return CellRect.FromLimits(Cell(a2[0], map), Cell(a2[1], map));
+            // [x,z] is the cell form everywhere else, so it means a cell here too. It used to fall through to the name
+            // resolver, which stringified the array and refused it as "not a cell, thing id, @pawn or anchor".
+            if (t is JArray a3 && a3.Count == 2 && a3.All(x => x.Type == JTokenType.Integer)) return CellRect.SingleCell(Cell(t, map, what));
             if (t is JObject o && o["min"] != null) return CellRect.FromLimits(Cell(o["min"], map), Cell(o["max"], map));
-            string s = t.ToString().Trim();
+            string s = P.Flat(t).Trim();
             var (rect, _, rest) = ResolveRef(s, map, what);
             if (!string.IsNullOrWhiteSpace(rest))
             {

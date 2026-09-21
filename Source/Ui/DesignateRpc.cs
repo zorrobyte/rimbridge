@@ -303,6 +303,12 @@ namespace RimBridge.Ui
             int id = P.Int(p, "id");
             var letter = Find.LetterStack.LettersListForReading.FirstOrDefault(l => l.ID == id) ?? throw new RpcError("no letter with that id (state.letters)");
             string action = P.Str(p, "action");
+            // An unknown action used to fall through into the choose branch and refuse with "missing param 'choice'",
+            // which is true of choose and says nothing about the action that was sent. "close" was tried three times
+            // and never learned about.
+            if (action != "dismiss" && action != "choose")
+                throw new RpcError($"unknown action '{action}'. Available: choose (needs choice), dismiss"
+                    + (letter is ChoiceLetter clx && clx.Choices.Any() ? ". Choices on this letter: " + string.Join(" | ", clx.Choices.Select(OptionText)) : ""));
             if (action == "dismiss")
             {
                 if (letter is ChoiceLetter cl0 && cl0.Choices.Any())
@@ -314,8 +320,10 @@ namespace RimBridge.Ui
                 Find.LetterStack.RemoveLetter(letter);
                 return new JObject { ["dismissed"] = id };
             }
-            if (!(letter is ChoiceLetter cl)) throw new RpcError("letter has no choices");
+            if (!(letter is ChoiceLetter cl)) throw new RpcError("letter has no choices; dismiss it instead");
             var choices = cl.Choices.ToList();
+            if (p["choice"] == null || p["choice"]!.Type == JTokenType.Null)
+                throw new RpcError("action 'choose' needs a choice (label or index). Available: " + string.Join(" | ", choices.Select(OptionText)));
             DiaOption? opt = null;
             if (p["choice"]?.Type == JTokenType.Integer) opt = choices.ElementAtOrDefault(P.Int(p, "choice"));
             else { string label = P.Str(p, "choice"); opt = choices.FirstOrDefault(c => OptionText(c).Equals(label, StringComparison.OrdinalIgnoreCase)) ?? choices.FirstOrDefault(c => OptionText(c).IndexOf(label, StringComparison.OrdinalIgnoreCase) >= 0); }
@@ -324,6 +332,21 @@ namespace RimBridge.Ui
             opt.action?.Invoke();
             if (Find.LetterStack.LettersListForReading.Contains(letter) && opt.action == null) Find.LetterStack.RemoveLetter(letter);
             return new JObject { ["chose"] = OptionText(opt), ["letter"] = id };
+        }
+
+        [Rpc("ui.quest_accept", "{id: quest id from state.quests, by?: pawn} accept a quest that is NotYetAccepted")]
+        public static JToken QuestAccept(JObject p)
+        {
+            Map();
+            int id = P.Int(p, "id");
+            var q = Find.QuestManager.QuestsListForReading.FirstOrDefault(x => x.id == id)
+                    ?? throw new RpcError($"no quest with id {id} (state.quests lists them)");
+            if (q.State != QuestState.NotYetAccepted)
+                throw new RpcError($"quest {id} is {q.State}, not NotYetAccepted");
+            var by = p["by"] != null ? Lookup.Colonist(P.Str(p, "by")) : Find.CurrentMap.mapPawns.FreeColonists.FirstOrDefault();
+            if (by == null) throw new RpcError("no free colonist to accept the quest with");
+            q.Accept(by);
+            return new JObject { ["quest"] = q.id, ["name"] = q.name, ["state"] = q.State.ToString(), ["by"] = by.LabelShort };
         }
 
         static string OptionText(DiaOption o) => ((string)HarmonyLib.AccessTools.Field(typeof(DiaOption), "text").GetValue(o) ?? "").StripTags();

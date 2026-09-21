@@ -51,7 +51,14 @@ namespace RimBridge.MapView
             if (p["only"] is JArray oa)
             {
                 only.Clear();
-                foreach (var s in oa) { var name = s.ToString(); if (!Sections.Contains(name)) throw new RpcError("only must be a list of " + string.Join("|", Sections)); only.Add(name); }
+                // Name the element that was rejected. "only must be a list of grid|buildings|..." does not say which
+                // of the three sent was the bad one, and the caller had sent two valid names and one invented one.
+                foreach (var s in oa)
+                {
+                    var name = Server.P.Flat(s);
+                    if (!Sections.Contains(name)) throw new RpcError($"only: '{name}' is not a section. Available: {string.Join("|", Sections)}");
+                    only.Add(name);
+                }
             }
 
             // The grid is sized first (it may coarsen to fit); the sparse lists then get whatever is left, and

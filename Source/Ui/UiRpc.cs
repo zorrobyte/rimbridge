@@ -268,12 +268,13 @@ namespace RimBridge.Ui
             return res;
         }
 
-        [Rpc("ui.job", "{pawn, job: JobDef, target?: [x,z]|thingId, target_b?, target_c?, count?, queue?: false} give a pawn a specific job directly (e.g. Ingest, Equip, Wear, TakeInventory, HaulToCell, Rescue, TendPatient, LayDown, Research). Prefer ui.order when possible.")]
+        [Rpc("ui.job", "{pawn, job: JobDef, target?: [x,z]|thingId, target_b?, target_c?, count?, queue?: false} give a pawn a specific job directly (e.g. Ingest with target = a downed pawn feeds them, Equip, Wear, TakeInventory, HaulToCell, Rescue, TendPatient, LayDown, Research). Prefer ui.order when possible.")]
         public static JToken JobRpc(JObject p)
         {
             Map();
             var pawn = Lookup.Colonist(P.Str(p, "pawn"));
             var def = Lookup.Def<JobDef>(P.Str(p, "job"));
+            string before = State.Snapshot.JobText(pawn);
             var job = JobMaker.MakeJob(def);
             if (p["target"] != null) job.targetA = (LocalTargetInfo)Coerce.To(p["target"], typeof(LocalTargetInfo))!;
             if (p["target_b"] != null) job.targetB = (LocalTargetInfo)Coerce.To(p["target_b"], typeof(LocalTargetInfo))!;
@@ -292,7 +293,12 @@ namespace RimBridge.Ui
                 // a drafted pawn's job, or an attack/move job, is manual military control: the combat order leaves the pawn alone for an hour
                 Hooks.RaiseManualTouch(pawn, "ui.job:" + def.defName);
             }
-            return new JObject { ["ok"] = ok, ["pawn"] = pawn.LabelShort, ["job"] = def.defName, ["now"] = State.Snapshot.JobText(pawn) };
+            // RimWorld ends the running job at the end of the tick, so reading the pawn back here still shows the old
+            // one. Reporting that as "now" read as a refusal that had returned ok: true. Both are named instead.
+            string after = State.Snapshot.JobText(pawn);
+            var o = new JObject { ["ok"] = ok, ["pawn"] = pawn.LabelShort, ["job"] = def.defName, ["was"] = before, ["now"] = after };
+            if (ok && after == before) o["note"] = "accepted; the pawn changes job at the end of this tick, so 'now' still names the previous one";
+            return o;
         }
 
         [Rpc("ui.cancel_job", "{pawn} interrupt the pawn's current job (and undraft if drafted=false given)")]

@@ -35,6 +35,7 @@ namespace RimBridge.State
                 ["nutrition"] = Math.Round(stored, 1),
                 ["nutrition_loose"] = Math.Round(loose.Nutrition, 1),
                 ["nutrition_forbidden"] = Math.Round(loose.Forbidden, 1),
+                ["nutrition_loose_by_def"] = loose.Breakdown(),
                 ["food_days"] = FoodRules.FoodDays(stored + loose.Nutrition, cols.Count),
                 ["food_days_stored"] = FoodRules.FoodDays(stored, cols.Count),
                 ["threat_points"] = Math.Round(StorytellerUtility.DefaultThreatPointsNow(map)),
@@ -426,6 +427,17 @@ namespace RimBridge.State
         {
             public float Nutrition;
             public float Forbidden;
+            /// <summary>defName -> (stacks, nutrition). Without it the total cannot be checked against anything.</summary>
+            public readonly Dictionary<string, (int Stacks, float Nutrition)> ByDef = new Dictionary<string, (int, float)>();
+
+            /// <summary>Biggest contributors first, so a total nobody can account for is one call from being accounted for.</summary>
+            public JArray Breakdown(int take = 12)
+            {
+                var arr = new JArray();
+                foreach (var kv in ByDef.OrderByDescending(k => k.Value.Nutrition).Take(take))
+                    arr.Add(new JObject { ["def"] = kv.Key, ["stacks"] = kv.Value.Stacks, ["nutrition"] = Math.Round(kv.Value.Nutrition, 1) });
+                return Engine.Render.Truncated(arr, ByDef.Count, take);
+            }
         }
 
         /// <summary>
@@ -433,6 +445,11 @@ namespace RimBridge.State
         /// famine because nobody has claimed the drop-pod loot yet is the same lie wearing a different hat. It is
         /// reported separately -- nutrition_forbidden -- so the model can see the action it needs to take, but it
         /// is not subtracted from what the colony has.
+        ///
+        /// A corpse is human-edible and so counts here, which is correct and was unreadable: the summary said 20.3
+        /// nutrition loose while state.stocks(Foods) said 0 and map.find(kind=item) found nothing, and the 20.3 was
+        /// twenty-one bodies. The per-def breakdown is the whole fix -- the total is right, it just could not be
+        /// checked against anything.
         /// </summary>
         public static LooseFoodTally LooseFood(Map map)
         {
@@ -448,6 +465,9 @@ namespace RimBridge.State
                 float n = def.GetStatValueAbstract(StatDefOf.Nutrition) * th.stackCount;
                 t.Nutrition += n;
                 if (th.IsForbidden(Faction.OfPlayer)) t.Forbidden += n;
+                string key = th is Corpse c ? "Corpse_" + (c.InnerPawn?.kindDef?.defName ?? "unknown") : def.defName;
+                var prev = t.ByDef.TryGetValue(key, out var v) ? v : (0, 0f);
+                t.ByDef[key] = (prev.Item1 + 1, prev.Item2 + n);
             }
             return t;
         }
@@ -489,5 +509,9 @@ namespace RimBridge.State
         public static string Trunc(string s, int n) => s.Length <= n ? s : s.Substring(0, n) + "…";
 
         public static JToken Cell(IntVec3 c) => c.IsValid ? new JArray(c.x, c.z) : JValue.CreateNull();
+
+        /// <summary>A cell for a sentence. Cell() returns a JArray, and interpolating one of those into a string
+        /// prints indented JSON: every kidnapping alert read "carrying Kangjoon at [\r\n  129,\r\n  106\r\n]".</summary>
+        public static string CellText(IntVec3 c) => c.IsValid ? $"[{c.x},{c.z}]" : "(nowhere)";
     }
 }

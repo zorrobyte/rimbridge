@@ -47,7 +47,7 @@ namespace RimBridge.State
             return Render.Truncated(new JArray(pawns.Take(200).Select(x => x.IsColonist ? Snapshot.PawnBrief(x) : (JToken)Render.PawnHandle(x))), pawns.Count, 200);
         }
 
-        [Rpc("state.pawn", "{pawn: id|name} full pawn detail: skills, traits, health, needs, mood thoughts, gear, work priorities, schedule, policies, relations")]
+        [Rpc("state.pawn", "{pawn: id|name} full pawn detail: skills, traits, health, needs, mood thoughts, gear, work priorities, schedule, policies, relations. Each need is {pct, level, state?} where 100 is fully satisfied: Food 100 is fed, Food 0 is starving, and eating raises it.")]
         public static JToken Pawn(JObject p)
         {
             var pawn = Lookup.Pawn(P.Str(p, "pawn"));
@@ -83,7 +83,7 @@ namespace RimBridge.State
             // Needs & mood
             if (pawn.needs != null)
             {
-                o["needs"] = new JObject(pawn.needs.AllNeeds.Select(n => new JProperty(n.def.defName, Math.Round(n.CurLevelPercentage * 100))));
+                o["needs"] = new JObject(pawn.needs.AllNeeds.Select(n => new JProperty(n.def.defName, NeedValue(n))));
                 if (pawn.needs.mood != null)
                 {
                     var thoughts = new List<Thought>();
@@ -275,11 +275,29 @@ namespace RimBridge.State
             return arr;
         }
 
-        [Rpc("state.areas", "allowed areas (Home, animal pens, custom)")]
+        [Rpc("state.areas", "allowed areas (Home, animal pens, custom) with how many of their cells are roofed and indoors")]
         public static JToken Areas(JObject p)
         {
             var map = Map();
-            return new JArray(map.areaManager.AllAreas.Select(a => new JObject { ["label"] = a.Label, ["cells"] = a.TrueCount, ["mutable"] = a.Mutable }));
+            return new JArray(map.areaManager.AllAreas.Select(a =>
+            {
+                // A pawn restricted to an area is only sheltered if the area is sheltered, and "it exists and has
+                // cells" does not say that. An outdoor rectangle named PetSafe read as a safe room for a whole
+                // episode while the cat stood in it and was shot. Counted, not judged.
+                int roofed = 0, indoors = 0, n = 0;
+                foreach (var c in a.ActiveCells)
+                {
+                    n++;
+                    if (c.Roofed(map)) roofed++;
+                    var room = c.GetRoom(map);
+                    if (room != null && !room.PsychologicallyOutdoors && !room.TouchesMapEdge) indoors++;
+                }
+                return new JObject
+                {
+                    ["label"] = a.Label, ["cells"] = a.TrueCount, ["mutable"] = a.Mutable,
+                    ["roofed_cells"] = roofed, ["indoor_cells"] = indoors, ["counted"] = n,
+                };
+            }));
         }
 
         [Rpc("state.policies", "apparel/food/drug/reading policies available")]
@@ -321,6 +339,24 @@ namespace RimBridge.State
             return new JObject { ["danger"] = map.dangerWatcher.DangerRating.ToString(), ["threat_points"] = Math.Round(StorytellerUtility.DefaultThreatPointsNow(map)), ["hostiles"] = arr, ["home_center"] = Snapshot.Cell(home),
                 ["active"] = tally.Active, ["downed"] = tally.Downed, ["dormant"] = tally.Dormant,
                 ["note"] = "hostiles = what a player can see (fog applies). status: active | downed (on the ground, may recover) | dormant (asleep, not yet awake). danger is RimWorld's own rating and ignores downed and dormant hostiles." };
+        }
+
+        /// <summary>
+        /// A need as a number plus, where the game defines one, its own word for the state.
+        /// The bare percentage was read backwards twice in one episode: "Food need 88% (very hungry)", and then
+        /// 88 falling to 70 read as the pawn being fed. 100 is satisfied and feeding raises it, but nothing in a
+        /// lone scalar says so. `level` keeps the 0-1 fraction so an existing reader still finds a number.
+        /// </summary>
+        static JObject NeedValue(Need n)
+        {
+            var o = new JObject
+            {
+                ["pct"] = Math.Round(n.CurLevelPercentage * 100),
+                ["level"] = Math.Round(n.CurLevelPercentage, 3),
+            };
+            if (n is Need_Food f) o["state"] = f.CurCategory.ToString();
+            else if (n is Need_Rest r) o["state"] = r.CurCategory.ToString();
+            return o;
         }
     }
 }

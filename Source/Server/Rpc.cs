@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace RimBridge.Server
@@ -62,11 +63,19 @@ namespace RimBridge.Server
             }
         }
 
-        public static JToken Describe()
+        /// <summary>
+        /// Every method, or the ones whose name contains <paramref name="filter"/>. The filter used to be ignored,
+        /// and the full list is long enough to be truncated before it reaches the model: three calls in a row came
+        /// back identical and useless, and the method name being looked for was in the part that was cut.
+        /// </summary>
+        public static JToken Describe(string? filter = null)
         {
             var arr = new JArray();
             foreach (var kv in Methods.OrderBy(k => k.Key))
+            {
+                if (!string.IsNullOrEmpty(filter) && kv.Key.IndexOf(filter!, StringComparison.OrdinalIgnoreCase) < 0) continue;
                 arr.Add(new JObject { ["method"] = kv.Key, ["doc"] = kv.Value.Attr.Doc });
+            }
             return arr;
         }
 
@@ -75,7 +84,11 @@ namespace RimBridge.Server
         {
             p ??= new JObject();
             if (!Methods.TryGetValue(method, out var e))
-                return Fail($"unknown method '{method}'", null);
+            {
+                var near = NameMatch.Near(method, Methods.Keys);
+                return Fail($"unknown method '{method}'"
+                    + (near.Count > 0 ? ". Did you mean: " + string.Join(", ", near) : ". bridge.methods filter=<substring> lists them"), null);
+            }
             try
             {
                 JToken? result;
@@ -121,10 +134,17 @@ namespace RimBridge.Server
                 if (def != null) return def;
                 throw new RpcError($"missing param '{key}'");
             }
-            return t.Type == JTokenType.String ? (string)t! : t.ToString();
+            return Flat(t);
         }
 
-        public static string? OptStr(JObject p, string key) => p[key] is { Type: not JTokenType.Null } t ? (t.Type == JTokenType.String ? (string)t! : t.ToString()) : null;
+        public static string? OptStr(JObject p, string key) => p[key] is { Type: not JTokenType.Null } t ? Flat(t) : null;
+
+        /// <summary>
+        /// A JToken as one line. Newtonsoft's ToString() defaults to Formatting.Indented, so a cell that arrived as a
+        /// real array became "[\r\n  140,\r\n  133\r\n]" -- which failed to resolve, and then read back to the model in
+        /// the error as three lines of noise. Every string built from a caller's token goes through here.
+        /// </summary>
+        public static string Flat(JToken t) => t.Type == JTokenType.String ? (string)t! : t.ToString(Formatting.None);
 
         public static int Int(JObject p, string key, int? def = null)
         {

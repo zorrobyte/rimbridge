@@ -504,7 +504,9 @@ namespace RimBridge.Ledger
         // Who is being carried off, and which infections we have already announced. Both are "has this started?"
         // questions, and neither had an event: the model's whole trigger history for the raid that cost it a
         // colonist was four wakes, none of which was the chase, the kidnap or the interception.
-        private readonly HashSet<int> _carried = new HashSet<int>();
+        // Keyed by pawn id, holding the label, because the pawn we most need to name is the one that just left the map:
+        // the "gone" lookup ran against AllPawnsSpawned and so answered null in exactly the kidnapping case.
+        private readonly Dictionary<int, string> _carried = new Dictionary<int, string>();
         private readonly HashSet<string> _infections = new HashSet<string>();
         public LedgerComponent(Game game) { }
 
@@ -532,16 +534,27 @@ namespace RimBridge.Ledger
                 if (victim.Faction != Faction.OfPlayer) continue;
                 seen.Add(victim.thingIDNumber);
                 int edge = EdgeDistance(m, p.Position);
-                if (_carried.Add(victim.thingIDNumber))
-                    EventLedger.Add("colonist_carried", $"{p.LabelShortCap} is carrying {victim.LabelShortCap} at {State.Snapshot.Cell(p.Position)}, {edge} cells from the map edge",
+                if (!_carried.ContainsKey(victim.thingIDNumber))
+                {
+                    _carried[victim.thingIDNumber] = victim.LabelShort;
+                    EventLedger.Add("colonist_carried", $"{p.LabelShortCap} is carrying {victim.LabelShortCap} at {State.Snapshot.CellText(p.Position)}, {edge} cells from the map edge",
                         new JObject { ["colonist"] = victim.LabelShort, ["carrier"] = p.LabelShort, ["pos"] = State.Snapshot.Cell(p.Position), ["edge_distance"] = edge });
+                }
             }
-            foreach (var id in _carried.Where(i => !seen.Contains(i)).ToList())
+            foreach (var id in _carried.Keys.Where(i => !seen.Contains(i)).ToList())
             {
+                string label = _carried[id];
                 _carried.Remove(id);
                 var who = m.mapPawns.AllPawnsSpawned.FirstOrDefault(x => x.thingIDNumber == id);
-                EventLedger.Add("colonist_carried_gone", (who != null ? who.LabelShortCap.ToString() : "a colonist") + " is no longer being carried",
-                    new JObject { ["colonist"] = who?.LabelShort });
+                // On the map or off it is the whole difference between a rescue and a kidnapping, and it is the one
+                // thing we can state without guessing. What it means is the reader's call.
+                var data = new JObject { ["colonist"] = label, ["on_map"] = who != null };
+                if (who != null) { data["pos"] = State.Snapshot.Cell(who.Position); data["downed"] = who.Downed; }
+                EventLedger.Add("colonist_carried_gone",
+                    who != null
+                        ? $"{label} is no longer being carried, and is on the map at {State.Snapshot.CellText(who.Position)}{(who.Downed ? ", downed" : "")}"
+                        : $"{label} is no longer being carried, and is not on the map",
+                    data);
             }
         }
 
